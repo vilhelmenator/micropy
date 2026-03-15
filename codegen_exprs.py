@@ -747,9 +747,89 @@ class ExprMixin:
                     c_args.append(f"(long long)({expr})")
         return "".join(fmt_parts), c_args
 
+    def _print_list_arg(self, arg) -> None:
+        """Emit statements to print a list arg in [elem, ...] format."""
+        self._lc_counter += 1
+        idx = f"_pi_{self._lc_counter}"
+        expr = self.compile_expr(arg)
+        t = self.infer_type(arg)
+
+        # Determine element type and format
+        elem_t = None
+        list_name = None
+        if isinstance(arg, ast.Name):
+            elem_t = self._list_vars.get(arg.id)
+            if elem_t and elem_t in self.typed_lists:
+                list_name = self.typed_lists[elem_t]
+
+        self.emit('printf("[");')
+        if list_name:
+            # Generated typed list (e.g. Vec2List*)
+            self.emit(f"for (int64_t {idx} = 0; {idx} < {expr}->len; {idx}++) {{")
+            self.indent += 1
+            self.emit(f"if ({idx} > 0) printf(\", \");")
+            elem_expr = f"{expr}->data[{idx}]"
+            if elem_t in self.structs:
+                fields = self.structs[elem_t]
+                parts = []
+                fargs = []
+                for fn, ft in fields:
+                    if ft == "double":
+                        parts.append(f"{fn}=%.6g")
+                        fargs.append(f"{elem_expr}.{fn}")
+                    else:
+                        parts.append(f"{fn}=%lld")
+                        fargs.append(f"(long long){elem_expr}.{fn}")
+                fmt = f"{elem_t}({', '.join(parts)})"
+                farg_str = ", ".join(fargs)
+                self.emit(f'printf("{fmt}", {farg_str});')
+            else:
+                self.emit(f'printf("%lld", (long long){elem_expr});')
+        else:
+            # MpList* with MpVal elements
+            self.emit(f"for (int64_t {idx} = 0; {idx} < {expr}->len; {idx}++) {{")
+            self.indent += 1
+            self.emit(f"if ({idx} > 0) printf(\", \");")
+            raw = f"{expr}->data[{idx}]"
+            if elem_t == "double":
+                self.emit(f"printf(\"%.6g\", mp_as_float({raw}));")
+            elif elem_t == "MpStr*":
+                self.emit(f"{{ MpStr* _ps = (MpStr*)(uintptr_t)mp_as_int({raw}); printf(\"%.*s\", (int)_ps->len, _ps->data); }}")
+            else:
+                self.emit(f"printf(\"%lld\", (long long)mp_as_int({raw}));")
+        self.indent -= 1
+        self.emit("}")
+        self.emit('printf("]\\n");')
+
     def _compile_print(self, args) -> str:
         if not args:
             return 'printf("\\n")'
+        # If any arg is a list type, emit loop-based printing and return a no-op
+        for arg in args:
+            t = self.infer_type(arg)
+            is_list = (t == "MpList*") or (
+                isinstance(arg, ast.Name)
+                and self._list_vars.get(arg.id) in self.typed_lists
+            )
+            if is_list:
+                # Emit each arg: non-list ones via printf, list ones via loop
+                for a in args:
+                    ta = self.infer_type(a)
+                    ia = (ta == "MpList*") or (
+                        isinstance(a, ast.Name)
+                        and self._list_vars.get(a.id) in self.typed_lists
+                    )
+                    if ia:
+                        self._print_list_arg(a)
+                    else:
+                        ea = self.compile_expr(a)
+                        if ta == "double":
+                            self.emit(f'printf("%.6g\\n", {ea});')
+                        elif ta == "MpStr*":
+                            self.emit(f'printf("%.*s\\n", (int)(({ea})->len), ({ea})->data);')
+                        else:
+                            self.emit(f'printf("%lld\\n", (long long)({ea}));')
+                return "(void)0"
         fmt_parts = []
         c_args = []
         for arg in args:
