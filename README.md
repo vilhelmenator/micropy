@@ -271,6 +271,17 @@ match status:
     case _:   print("other")
 ```
 
+### List comprehensions
+
+```python
+squares: list = [i * i for i in range(10)]
+doubled: list = [x * 2 for x in my_array]
+evens:   list = [x for x in my_array if x % 2 == 0]
+pos_sq:  list = [x * x for x in vals if x > 0]
+```
+
+Works with `range(...)`, `array[T, N]`, and typed lists. Elements are stored as `MpVal`; retrieve with `as_int(list_get(lst, i))` or `as_float(...)`.
+
 ### Strings
 
 ```python

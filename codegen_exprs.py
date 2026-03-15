@@ -182,6 +182,9 @@ class ExprMixin:
             self.emit(f'char {buf}[512]; snprintf({buf}, 512, "{fmt}"{arg_str});')
             return buf
 
+        if isinstance(node, ast.ListComp):
+            return self._compile_listcomp(node)
+
         if isinstance(node, ast.Lambda):
             lname = self._lambda_table.get(id(node))
             if lname:
@@ -854,6 +857,86 @@ class ExprMixin:
             self.emit(f"{s};")
 
         return f"mp_thread_spawn({trampoline_name}, {alloc_var})"
+
+    def _compile_listcomp(self, node: ast.ListComp) -> str:
+        """Compile [elt for target in iter if cond ...] into a MpList* temp."""
+        self._lc_counter += 1
+        lc_var = f"_lc_{self._lc_counter}"
+        self.emit(f"MpList* {lc_var} = mp_list_new();")
+
+        # Only handle single generator
+        gen = node.generators[0]
+        target_name = gen.target.id if isinstance(gen.target, ast.Name) else "_lc_x"
+        iter_node = gen.iter
+
+        saved_locals = self.local_vars.copy()
+        elem_type = "int64_t"
+        opened_blocks = 1  # the for loop block
+
+        # --- Emit the for loop ---
+        if (isinstance(iter_node, ast.Call)
+                and isinstance(iter_node.func, ast.Name)
+                and iter_node.func.id == "range"):
+            args = iter_node.args
+            if len(args) == 1:
+                stop = self.compile_expr(args[0])
+                self.emit(f"for (int64_t {target_name} = 0; {target_name} < {stop}; {target_name}++) {{")
+            elif len(args) >= 2:
+                start = self.compile_expr(args[0])
+                stop = self.compile_expr(args[1])
+                step = self.compile_expr(args[2]) if len(args) == 3 else "1"
+                self.emit(f"for (int64_t {target_name} = {start}; {target_name} < {stop}; {target_name} += {step}) {{")
+            self.indent += 1
+            self.local_vars[target_name] = "int64_t"
+            elem_type = "int64_t"
+
+        elif isinstance(iter_node, ast.Name) and iter_node.id in self._array_vars:
+            et, size = self._array_vars[iter_node.id]
+            idx = f"_lci_{self._lc_counter}"
+            self.emit(f"for (int64_t {idx} = 0; {idx} < {size}; {idx}++) {{")
+            self.indent += 1
+            self.emit(f"{et} {target_name} = {iter_node.id}[{idx}];")
+            self.local_vars[target_name] = et
+            elem_type = et
+
+        elif isinstance(iter_node, ast.Name) and iter_node.id in self._list_vars:
+            et = self._list_vars[iter_node.id]
+            idx = f"_lci_{self._lc_counter}"
+            self.emit(f"for (int64_t {idx} = 0; {idx} < {iter_node.id}->len; {idx}++) {{")
+            self.indent += 1
+            self.emit(f"{et} {target_name} = ({et})mp_as_int({iter_node.id}->data[{idx}]);")
+            self.local_vars[target_name] = et
+            elem_type = et
+
+        else:
+            self.emit(f"/* ERROR: unsupported list comprehension iterable */")
+            return lc_var
+
+        # --- Emit if guards ---
+        for if_node in gen.ifs:
+            cond = self.compile_expr(if_node)
+            self.emit(f"if ({cond}) {{")
+            self.indent += 1
+            opened_blocks += 1
+
+        # --- Emit the element append ---
+        elt_expr = self.compile_expr(node.elt)
+        elt_type = self.infer_type(node.elt)
+        if elt_type == "double":
+            wrapped = f"mp_val_float({elt_expr})"
+        elif elt_type == "MpStr*":
+            wrapped = f"mp_val_str({elt_expr})"
+        else:
+            wrapped = f"mp_val_int((int64_t)({elt_expr}))"
+        self.emit(f"mp_list_append({lc_var}, {wrapped});")
+
+        # --- Close all opened blocks ---
+        for _ in range(opened_blocks):
+            self.indent -= 1
+            self.emit("}")
+
+        self.local_vars = saved_locals
+        return lc_var
 
     def compile_op(self, op) -> str:
         ops = {

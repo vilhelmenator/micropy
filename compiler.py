@@ -68,6 +68,7 @@ class Compiler(StmtMixin, ExprMixin):
     _extern_funcs: set = field(default_factory=set)   # names of @extern functions
     _variadic_funcs: set = field(default_factory=set)  # names of variadic functions (have *args)
     _fstr_counter: int = 0                            # unique suffix for f-string buffers
+    _lc_counter: int = 0                              # unique suffix for list comprehension temps
     _funcptr_rettypes: dict = field(default_factory=dict)  # varname → ret ctype for func ptrs
     _current_file: str = ""                           # file being compiled (for errors)
     _current_line: int = 0                            # line being compiled (for errors)
@@ -193,6 +194,9 @@ class Compiler(StmtMixin, ExprMixin):
 
         if isinstance(node, ast.IfExp):
             return self.infer_type(node.body)
+
+        if isinstance(node, ast.ListComp):
+            return "MpList*"
 
         return "int64_t"
 
