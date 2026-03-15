@@ -523,8 +523,12 @@ class StmtMixin:
                     tgt = self.compile_expr(tgt_node)
                     if i < len(self.structs[base]):
                         fname, ftype = self.structs[base][i]
-                        self.local_vars[tgt] = ftype
-                        self.emit(f"{ftype} {tgt} = {tmp}.{fname};")
+                        already_declared = tgt in self.local_vars or tgt in self.func_args
+                        if already_declared:
+                            self.emit(f"{tgt} = {tmp}.{fname};")
+                        else:
+                            self.local_vars[tgt] = ftype
+                            self.emit(f"{ftype} {tgt} = {tmp}.{fname};")
             elif ret_type.startswith("_TupleRet_"):
                 # Tuple return struct — unpack by field position
                 # Find the field key from TUPLE_RET_MAP
@@ -541,18 +545,24 @@ class StmtMixin:
                             break
                         tgt = self.compile_expr(tgt_node)
                         _ft = _fkey[i]
+                        already_declared = (tgt in self.local_vars or tgt in self.func_args
+                                            or tgt in self._array_vars)
                         if "[" in _ft:
-                            # Array field: declare as array and memcpy
+                            # Array field: only declare if not already in scope
                             bracket = _ft.index("[")
                             _elem = _ft[:bracket]
                             _size_str = _ft[bracket:]  # "[N]"
                             _size_n = _size_str.strip("[]")
-                            self.emit(f"{_elem} {tgt}{_size_str};")
+                            if not already_declared:
+                                self.emit(f"{_elem} {tgt}{_size_str};")
+                                self._array_vars[tgt] = (_elem, _size_n)
                             self.emit(f"memcpy({tgt}, {tmp}.v{i}, {_size_n} * sizeof({_elem}));")
-                            self.local_vars[tgt] = _ft
                         else:
-                            self.local_vars[tgt] = _ft
-                            self.emit(f"{_ft} {tgt} = {tmp}.v{i};")
+                            if already_declared:
+                                self.emit(f"{tgt} = {tmp}.v{i};")
+                            else:
+                                self.local_vars[tgt] = _ft
+                                self.emit(f"{_ft} {tgt} = {tmp}.v{i};")
             else:
                 self.emit(f"/* unpack */ __auto_type _mp_unpack = {val};")
             return
