@@ -451,20 +451,31 @@ class StmtMixin:
             return
         val_node = node.value
         for target in node.targets:
-            # lst[i] = x on a MpList* → mp_list_set with auto-boxing
-            if isinstance(target, ast.Subscript) and self.infer_type(target.value) == "MpList*":
-                lst = self.compile_expr(target.value)
-                idx = self.compile_expr(target.slice)
-                v = self.compile_expr(val_node)
-                vt = self.infer_type(val_node)
-                if vt == "double":   boxed = f"mp_val_float({v})"
-                elif vt == "MpStr*": boxed = f"mp_val_str({v})"
-                else:                boxed = f"mp_val_int((int64_t)({v}))"
-                self.emit(f"mp_list_set({lst}, {idx}, {boxed});")
-            else:
-                val = self.compile_expr(val_node)
-                tgt = self.compile_expr(target)
-                self.emit(f"{tgt} = {val};")
+            if isinstance(target, ast.Subscript):
+                # Generated typed list: XList_set, no boxing
+                if isinstance(target.value, ast.Name):
+                    _et = self._list_vars.get(target.value.id)
+                    if _et and _et in self.typed_lists:
+                        _lname = self.typed_lists[_et]
+                        lst = self.compile_expr(target.value)
+                        idx = self.compile_expr(target.slice)
+                        v = self.compile_expr(val_node)
+                        self.emit(f"{_lname}_set({lst}, {idx}, {v});")
+                        continue
+                # MpList* → mp_list_set with auto-boxing
+                if self.infer_type(target.value) == "MpList*":
+                    lst = self.compile_expr(target.value)
+                    idx = self.compile_expr(target.slice)
+                    v = self.compile_expr(val_node)
+                    vt = self.infer_type(val_node)
+                    if vt == "double":   boxed = f"mp_val_float({v})"
+                    elif vt == "MpStr*": boxed = f"mp_val_str({v})"
+                    else:                boxed = f"mp_val_int((int64_t)({v}))"
+                    self.emit(f"mp_list_set({lst}, {idx}, {boxed});")
+                    continue
+            val = self.compile_expr(val_node)
+            tgt = self.compile_expr(target)
+            self.emit(f"{tgt} = {val};")
 
     def compile_aug_assign(self, node: ast.AugAssign):
         tgt = self.compile_expr(node.target)

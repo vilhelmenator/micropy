@@ -190,8 +190,7 @@ class Compiler(StmtMixin, ExprMixin):
             return "int64_t"
 
         if isinstance(node, ast.Subscript):
-            val_type = self.infer_type(node.value)
-            if val_type == "MpList*" and isinstance(node.value, ast.Name):
+            if isinstance(node.value, ast.Name):
                 et = self._list_vars.get(node.value.id)
                 if et:
                     return et
@@ -649,9 +648,10 @@ class Compiler(StmtMixin, ExprMixin):
             self.emit(f'#include "{imp}.h"')
         self.emit("")
 
-        # Emit typed list implementations
+        # Emit scalar typed list implementations (before structs)
         for elem_t, list_name in self.typed_lists.items():
-            self.emit(gen_typed_list(elem_t, list_name))
+            if elem_t not in self.structs:
+                self.emit(gen_typed_list(elem_t, list_name))
 
         # Emit enums
         for node in ast.iter_child_nodes(tree):
@@ -675,6 +675,11 @@ class Compiler(StmtMixin, ExprMixin):
         for node in ast.iter_child_nodes(tree):
             if isinstance(node, ast.ClassDef) and node.name in self.structs:
                 self.compile_struct(node)
+
+        # Emit struct-element typed list implementations (after structs are defined)
+        for elem_t, list_name in self.typed_lists.items():
+            if elem_t in self.structs:
+                self.emit(gen_typed_list(elem_t, list_name))
 
         # Verify trait implementations
         for sname, trait_names in self.trait_impls.items():
@@ -953,16 +958,18 @@ class Compiler(StmtMixin, ExprMixin):
             self.emit("")
 
     def _scan_typed_lists(self, tree):
-        """Walk entire AST to find all typed_list[X] annotations."""
+        """Walk entire AST to find all typed_list[X] / list[StructType] annotations."""
+        nice = {"int64_t": "Int", "double": "Float", "uint8_t": "Byte", "int": "Bool"}
         for node in ast.walk(tree):
             if isinstance(node, ast.AnnAssign) and node.annotation is not None:
                 if isinstance(node.annotation, ast.Subscript):
                     base = node.annotation.value
-                    if isinstance(base, ast.Name) and base.id == "typed_list":
+                    if isinstance(base, ast.Name) and base.id in ("typed_list", "list"):
                         elem_t = get_typed_list_elem(node.annotation)
+                        # typed_list[T] always generates; list[T] only for struct types
+                        if base.id == "list" and elem_t not in self.structs:
+                            continue
                         if elem_t not in self.typed_lists:
-                            nice = {"int64_t": "Int", "double": "Float",
-                                    "uint8_t": "Byte", "int": "Bool"}
                             prefix = nice.get(elem_t, elem_t.replace("*", "Ptr"))
                             self.typed_lists[elem_t] = f"{prefix}List"
 

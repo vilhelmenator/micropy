@@ -131,6 +131,14 @@ class ExprMixin:
             return self.compile_call(node)
 
         if isinstance(node, ast.Subscript):
+            if isinstance(node.value, ast.Name):
+                vname = node.value.id
+                et = self._list_vars.get(vname)
+                if et and et in self.typed_lists:
+                    list_name = self.typed_lists[et]
+                    lst = self.compile_expr(node.value)
+                    idx = self.compile_expr(node.slice)
+                    return f"{list_name}_get({lst}, {idx})"
             if self.infer_type(node.value) == "MpList*":
                 lst = self.compile_expr(node.value)
                 idx = self.compile_expr(node.slice)
@@ -611,6 +619,19 @@ class ExprMixin:
             # Resolve TypeName_method via type inference
             obj_type = self.infer_type(obj)
 
+            # Generated typed list dispatch (struct element types, no boxing)
+            if isinstance(obj, ast.Name):
+                _et = self._list_vars.get(obj.id)
+                if _et and _et in self.typed_lists:
+                    _lname = self.typed_lists[_et]
+                    if attr == "append" and len(node.args) == 1:
+                        v = self.compile_expr(node.args[0])
+                        return f"{_lname}_append({obj_str}, {v})"
+                    if attr == "pop" and not node.args:
+                        return f"{_lname}_pop({obj_str})"
+                    if attr == "len" and not node.args:
+                        return f"{_lname}_len({obj_str})"
+
             # MpList* method dispatch with auto-boxing/unboxing
             if obj_type == "MpList*":
                 def _box(a_node):
@@ -893,10 +914,16 @@ class ExprMixin:
         return f"mp_thread_spawn({trampoline_name}, {alloc_var})"
 
     def _compile_listcomp(self, node: ast.ListComp) -> str:
-        """Compile [elt for target in iter if cond ...] into a MpList* temp."""
+        """Compile [elt for target in iter if cond ...] into a typed or MpList* temp."""
         self._lc_counter += 1
         lc_var = f"_lc_{self._lc_counter}"
-        self.emit(f"MpList* {lc_var} = mp_list_new();")
+        # Determine element type before emitting so we can pick the right list type
+        _elt_type_early = self.infer_type(node.elt)
+        _gen_list = self.typed_lists.get(_elt_type_early)
+        if _gen_list:
+            self.emit(f"{_gen_list}* {lc_var} = {_gen_list}_new();")
+        else:
+            self.emit(f"MpList* {lc_var} = mp_list_new();")
 
         # Only handle single generator
         gen = node.generators[0]
@@ -956,13 +983,14 @@ class ExprMixin:
         # --- Emit the element append ---
         elt_expr = self.compile_expr(node.elt)
         elt_type = self.infer_type(node.elt)
-        if elt_type == "double":
-            wrapped = f"mp_val_float({elt_expr})"
+        if _gen_list:
+            self.emit(f"{_gen_list}_append({lc_var}, {elt_expr});")
+        elif elt_type == "double":
+            self.emit(f"mp_list_append({lc_var}, mp_val_float({elt_expr}));")
         elif elt_type == "MpStr*":
-            wrapped = f"mp_val_str({elt_expr})"
+            self.emit(f"mp_list_append({lc_var}, mp_val_str({elt_expr}));")
         else:
-            wrapped = f"mp_val_int((int64_t)({elt_expr}))"
-        self.emit(f"mp_list_append({lc_var}, {wrapped});")
+            self.emit(f"mp_list_append({lc_var}, mp_val_int((int64_t)({elt_expr})));")
 
         # --- Close all opened blocks ---
         for _ in range(opened_blocks):
