@@ -31,6 +31,7 @@ python3 mpy.py build.mpy                          # run a project build script
 python3 mpy.py program.mpy --watch                # rebuild on save
 python3 mpy.py program.mpy --flags="-O2 -march=native"   # extra compiler/linker flags
 python3 mpy.py program.mpy --flags="-lssl -lz"           # link extra libraries
+python3 mpy.py program.mpy --no-line-directives           # omit #line directives from C output
 ```
 
 ## Language reference
@@ -144,10 +145,23 @@ union IntFloat:
 ### Enums
 
 ```python
-class Color:
+from enum import Enum
+
+class Color(Enum):
     RED   = 0
     GREEN = 1
     BLUE  = 2
+```
+
+Members are accessed as `Color.RED` and emit `Color_RED` in C. The `(Enum)` base is optional but recommended for clarity — plain `class Color:` with integer assignments works identically.
+
+Enum values work naturally in `match`/`case`:
+
+```python
+match color:
+    case Color.RED:   printf("red\n")
+    case Color.GREEN: printf("green\n")
+    case _:           printf("other\n")
 ```
 
 ### Functions
@@ -161,7 +175,7 @@ def clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
 
 Decorators: `@inline`, `@noinline`, `@noreturn`, `@cold`, `@hot`, `@extern`, `@staticmethod`.
 
-`None` is valid as a default value for `ptr[T]` parameters (emits `NULL`):
+`-> None` is equivalent to `-> void`. `None` as a value emits `NULL` and is valid anywhere a pointer is expected:
 
 ```python
 def find(list: ptr[Node], key: int, out: ptr[int] = None) -> int:
@@ -418,7 +432,7 @@ with arena_new() as a:
 buf: ptr[byte] = alloc(1024)
 free(buf)
 
-p: ptr[int] = addr_of(x)
+p: ptr[int] = addr_of(x)   # ref(x) is an alias
 v: int = deref(p)
 ```
 
