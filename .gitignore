@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+
+# Generated C files
+tests/*.c
+*.c
+
+# Compiled test binaries (no extension on macOS/Linux)
+tests/test_*
+!tests/test_*.mpy
+test_*
+!test_*.mpy
+
+# Shared libraries and binaries
+*.so
+*.dylib
+*.dll
+*.exe
+hotreload_host

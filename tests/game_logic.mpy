@@ -1,0 +1,18 @@
+state: int = 0
+speed: float = 1.0
+
+
+@export
+def init(initial_state: int) -> void:
+    state = initial_state
+    speed = 1.0
+
+
+@export
+def update(dt: float) -> void:
+    state += int(speed * dt * 100.0)
+
+
+@export
+def get_state() -> int:
+    return state
