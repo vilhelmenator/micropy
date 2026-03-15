@@ -1381,6 +1381,7 @@ class Compiler(StmtMixin, ExprMixin):
         "math", "sys", "os", "os.path", "time", "random", "re",
         "json", "collections", "itertools", "functools", "typing",
         "io", "pathlib", "struct", "array", "ctypes",
+        "enum",     # Python enum stdlib; Micropy emits C typedef enum instead
         "micropy",  # stub-only import for IDE type checking; not compiled
     })
 

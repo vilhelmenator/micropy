@@ -1038,7 +1038,13 @@ class StmtMixin:
     def _pattern_is_int_const(self, pattern) -> bool:
         """True if pattern can be expressed as a C switch case label."""
         if isinstance(pattern, ast.MatchValue):
-            return isinstance(pattern.value, ast.Constant) and isinstance(pattern.value.value, int)
+            val = pattern.value
+            if isinstance(val, ast.Constant) and isinstance(val.value, int):
+                return True
+            # Enum member access: GJKStatus.VALID
+            if isinstance(val, ast.Attribute) and isinstance(val.value, ast.Name):
+                return val.value.id in self.enums
+            return False
         if isinstance(pattern, ast.MatchOr):
             return all(self._pattern_is_int_const(p) for p in pattern.patterns)
         # Wildcard _ → default:
@@ -1062,6 +1068,8 @@ class StmtMixin:
                 if isinstance(val.value, str):
                     return f'strcmp({subject}, {repr(val.value)}) == 0'
                 return f"{subject} == {val.value}"
+            # Enum member or other named constant
+            return f"{subject} == {self.compile_expr(val)}"
         if isinstance(pattern, ast.MatchOr):
             parts = [self._pattern_to_cond(subject, p) for p in pattern.patterns]
             return " || ".join(f"({p})" for p in parts if p is not None)
@@ -1082,9 +1090,10 @@ class StmtMixin:
             if isinstance(pattern, ast.MatchAs) and pattern.pattern is None and pattern.name is None:
                 self.emit("default: {")
             elif isinstance(pattern, ast.MatchValue):
-                self.emit(f"case {pattern.value.value}: {{")
+                label = self.compile_expr(pattern.value)
+                self.emit(f"case {label}: {{")
             elif isinstance(pattern, ast.MatchOr):
-                labels = " ".join(f"case {p.value.value}:" for p in pattern.patterns)
+                labels = " ".join(f"case {self.compile_expr(p.value)}:" for p in pattern.patterns)
                 self.emit(f"{labels} {{")
             self.indent += 1
             for stmt in case.body:
