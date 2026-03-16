@@ -680,24 +680,23 @@ class Compiler(StmtMixin, ExprMixin):
                 self.compile_import_from(node)
 
         # ---- Emit C file ----
-        self.emit("#include <stdint.h>")
-        self.emit("#include <stdio.h>")
-        self.emit("#include <stdlib.h>")
-        self.emit("#include <string.h>")
-        self.emit("#include <math.h>")
+        # micropy_rt.h brings in stdint, stdio, stdlib, string, math — no need to repeat them.
+        self.emit('#include "micropy_rt.h"')
+        if self._variadic_funcs:
+            self.emit('#include <stdarg.h>')
         for inc in self.c_includes:
             if inc.startswith("<") and inc.endswith(">"):
                 self.emit(f"#include {inc}")
             else:
                 self.emit(f'#include "{inc}"')
-        self.emit('#include "micropy_rt.h"')
-        if self._variadic_funcs:
-            self.emit('#include <stdarg.h>')
         if self.test_funcs:
             self._ensure_test_header()
             self.emit('#include "micropy_test.h"')
-        for imp in self.imports:
-            self.emit(f'#include "{imp}.h"')
+        if module_name != "__main__":
+            self.emit(f'#include "{module_name}.h"')
+        else:
+            for imp in self.imports:
+                self.emit(f'#include "{imp}.h"')
         self.emit("")
 
         # Emit scalar typed list implementations (before structs)
@@ -903,8 +902,9 @@ class Compiler(StmtMixin, ExprMixin):
         guard = f"{module_name.upper()}_H"
         self.emit_header(f"#ifndef {guard}")
         self.emit_header(f"#define {guard}")
-        self.emit_header("#include <stdint.h>")
-        self.emit_header('#include "micropy_rt.h"')
+        self.emit_header('#include "micropy_types.h"')
+        for imp in self.imports:
+            self.emit_header(f'#include "{imp}.h"')
 
         for ename, members in mod_info.enums.items():
             self.emit_header(f"typedef enum {{")

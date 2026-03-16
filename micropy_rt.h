@@ -2,7 +2,7 @@
 #ifndef MICROPY_RT_H
 #define MICROPY_RT_H
 
-#include <stdint.h>
+#include "micropy_types.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,39 +10,28 @@
 #include <stdarg.h>
 #include <time.h>
 
-/* Thread-local storage qualifier — portable across GCC, Clang, MSVC */
-#if defined(_MSC_VER)
-#  define MP_TLS __declspec(thread)
-#elif defined(__GNUC__) || defined(__clang__)
-#  define MP_TLS __thread
-#else
-#  define MP_TLS _Thread_local
-#endif
-
-typedef uint64_t MpVal;
-
-typedef struct {
+struct MpList {
     MpVal* data;
     int64_t len;
     int64_t cap;
-} MpList;
+};
 
-typedef struct {
+struct MpDictEntry {
     char* key;
     MpVal val;
     int used;
-} MpDictEntry;
+};
 
-typedef struct {
+struct MpDict {
     MpDictEntry* entries;
     int64_t cap;
     int64_t len;
-} MpDict;
+};
 
-typedef struct {
+struct MpStr {
     char* data;
     int64_t len;
-} MpStr;
+};
 
 static inline MpVal mp_val_int(int64_t v) { MpVal r; memcpy(&r, &v, 8); return r; }
 static inline MpVal mp_val_float(double v) { MpVal r; memcpy(&r, &v, 8); return r; }
@@ -276,9 +265,9 @@ static inline MpStr* mp_getenv(const char* name) {
 #undef Rectangle
 #endif
 
-typedef HANDLE MpThread;
-typedef CRITICAL_SECTION MpMutex;
-typedef CONDITION_VARIABLE MpCond;
+struct MpThread { HANDLE _t; };
+struct MpMutex  { CRITICAL_SECTION _m; };
+struct MpCond   { CONDITION_VARIABLE _c; };
 
 typedef struct {
     void* (*func)(void*);
@@ -296,37 +285,38 @@ static inline MpThread mp_thread_spawn(void* (*func)(void*), void* arg) {
     _MpThreadTrampoline* t = (_MpThreadTrampoline*)malloc(sizeof(_MpThreadTrampoline));
     t->func = func;
     t->arg = arg;
-    return CreateThread(NULL, 0, _mp_thread_proc, t, 0, NULL);
+    MpThread th; th._t = CreateThread(NULL, 0, _mp_thread_proc, t, 0, NULL);
+    return th;
 }
 
 static inline void mp_thread_join(MpThread th) {
-    WaitForSingleObject(th, INFINITE);
-    CloseHandle(th);
+    WaitForSingleObject(th._t, INFINITE);
+    CloseHandle(th._t);
 }
 
 static inline MpMutex* mp_mutex_new(void) {
     MpMutex* m = (MpMutex*)malloc(sizeof(MpMutex));
-    InitializeCriticalSection(m);
+    InitializeCriticalSection(&m->_m);
     return m;
 }
 
-static inline void mp_mutex_lock(MpMutex* m) { EnterCriticalSection(m); }
-static inline void mp_mutex_unlock(MpMutex* m) { LeaveCriticalSection(m); }
+static inline void mp_mutex_lock(MpMutex* m) { EnterCriticalSection(&m->_m); }
+static inline void mp_mutex_unlock(MpMutex* m) { LeaveCriticalSection(&m->_m); }
 static inline void mp_mutex_free(MpMutex* m) {
-    if (m) { DeleteCriticalSection(m); free(m); }
+    if (m) { DeleteCriticalSection(&m->_m); free(m); }
 }
 
 static inline MpCond* mp_cond_new(void) {
     MpCond* c = (MpCond*)malloc(sizeof(MpCond));
-    InitializeConditionVariable(c);
+    InitializeConditionVariable(&c->_c);
     return c;
 }
 
 static inline void mp_cond_wait(MpCond* c, MpMutex* m) {
-    SleepConditionVariableCS(c, m, INFINITE);
+    SleepConditionVariableCS(&c->_c, &m->_m, INFINITE);
 }
-static inline void mp_cond_signal(MpCond* c) { WakeConditionVariable(c); }
-static inline void mp_cond_broadcast(MpCond* c) { WakeAllConditionVariable(c); }
+static inline void mp_cond_signal(MpCond* c) { WakeConditionVariable(&c->_c); }
+static inline void mp_cond_broadcast(MpCond* c) { WakeAllConditionVariable(&c->_c); }
 static inline void mp_cond_free(MpCond* c) { if (c) free(c); }
 
 static inline void mp_sleep_ms(int64_t ms) { Sleep((DWORD)ms); }
@@ -352,43 +342,43 @@ static inline int64_t mp_atomic_cas(volatile int64_t* ptr, int64_t expected, int
 #include <pthread.h>
 #include <unistd.h>
 
-typedef pthread_t MpThread;
-typedef pthread_mutex_t MpMutex;
-typedef pthread_cond_t MpCond;
+struct MpThread { pthread_t _t; };
+struct MpMutex  { pthread_mutex_t _m; };
+struct MpCond   { pthread_cond_t _c; };
 
 static inline MpThread mp_thread_spawn(void* (*func)(void*), void* arg) {
-    pthread_t th;
-    pthread_create(&th, NULL, func, arg);
+    MpThread th;
+    pthread_create(&th._t, NULL, func, arg);
     return th;
 }
 
 static inline void mp_thread_join(MpThread th) {
-    pthread_join(th, NULL);
+    pthread_join(th._t, NULL);
 }
 
 static inline MpMutex* mp_mutex_new(void) {
     MpMutex* m = (MpMutex*)malloc(sizeof(MpMutex));
-    pthread_mutex_init(m, NULL);
+    pthread_mutex_init(&m->_m, NULL);
     return m;
 }
 
-static inline void mp_mutex_lock(MpMutex* m) { pthread_mutex_lock(m); }
-static inline void mp_mutex_unlock(MpMutex* m) { pthread_mutex_unlock(m); }
+static inline void mp_mutex_lock(MpMutex* m) { pthread_mutex_lock(&m->_m); }
+static inline void mp_mutex_unlock(MpMutex* m) { pthread_mutex_unlock(&m->_m); }
 static inline void mp_mutex_free(MpMutex* m) {
-    if (m) { pthread_mutex_destroy(m); free(m); }
+    if (m) { pthread_mutex_destroy(&m->_m); free(m); }
 }
 
 static inline MpCond* mp_cond_new(void) {
     MpCond* c = (MpCond*)malloc(sizeof(MpCond));
-    pthread_cond_init(c, NULL);
+    pthread_cond_init(&c->_c, NULL);
     return c;
 }
 
-static inline void mp_cond_wait(MpCond* c, MpMutex* m) { pthread_cond_wait(c, m); }
-static inline void mp_cond_signal(MpCond* c) { pthread_cond_signal(c); }
-static inline void mp_cond_broadcast(MpCond* c) { pthread_cond_broadcast(c); }
+static inline void mp_cond_wait(MpCond* c, MpMutex* m) { pthread_cond_wait(&c->_c, &m->_m); }
+static inline void mp_cond_signal(MpCond* c) { pthread_cond_signal(&c->_c); }
+static inline void mp_cond_broadcast(MpCond* c) { pthread_cond_broadcast(&c->_c); }
 static inline void mp_cond_free(MpCond* c) {
-    if (c) { pthread_cond_destroy(c); free(c); }
+    if (c) { pthread_cond_destroy(&c->_c); free(c); }
 }
 
 static inline void mp_sleep_ms(int64_t ms) { usleep(ms * 1000); }
@@ -413,7 +403,7 @@ static inline int64_t mp_atomic_cas(volatile int64_t* ptr, int64_t expected, int
 #endif /* _WIN32 / POSIX */
 
 /* ---- Channel (bounded, multi-producer multi-consumer) ---- */
-typedef struct {
+struct MpChannel {
     MpVal* buffer;
     int64_t cap;
     int64_t head;
@@ -423,7 +413,7 @@ typedef struct {
     MpMutex* lock;
     MpCond* not_empty;
     MpCond* not_full;
-} MpChannel;
+};
 
 static inline MpChannel* mp_channel_new(int64_t capacity) {
     MpChannel* ch = (MpChannel*)malloc(sizeof(MpChannel));
@@ -534,12 +524,12 @@ typedef struct {
     void* arg;
 } _MpTask;
 
-typedef struct {
+struct MpThreadPool {
     MpChannel* tasks;
     MpThread* threads;
     int64_t num_threads;
     volatile int64_t shutdown;
-} MpThreadPool;
+};
 
 static void* _mp_pool_worker(void* arg) {
     MpThreadPool* pool = (MpThreadPool*)arg;
@@ -858,11 +848,11 @@ static inline int mp_rename(const char* old_path, const char* new_path) {
 }
 
 /* ---- Arena Allocator ---- */
-typedef struct {
+struct MpArena {
     char* data;
     int64_t size;
     int64_t offset;
-} MpArena;
+};
 
 static inline MpArena* mp_arena_new(int64_t size) {
     MpArena* a = (MpArena*)malloc(sizeof(MpArena));

@@ -32,10 +32,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 
 def build_once(args, source_dir) -> bool:
     """Compile and link. Returns True on success, False on failure."""
-    rt_path = os.path.join(source_dir, "micropy_rt.h")
-    src_rt = os.path.join(_HERE, "micropy_rt.h")
-    if not os.path.exists(rt_path) or os.path.getmtime(src_rt) > os.path.getmtime(rt_path):
-        shutil.copy2(src_rt, rt_path)
+    for _hdr in ("micropy_rt.h", "micropy_types.h"):
+        _dst = os.path.join(source_dir, _hdr)
+        _src = os.path.join(_HERE, _hdr)
+        if not os.path.exists(_dst) or os.path.getmtime(_src) > os.path.getmtime(_dst):
+            shutil.copy2(_src, _dst)
 
     compiler = Compiler(
         source_dir=source_dir,
