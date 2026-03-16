@@ -7,34 +7,31 @@ TMP_DIR:  cstr = "/tmp/micropy_io_dir"
 
 @test
 def test_file_write_and_exists() -> void:
-    f: file = file_open(TMP_FILE, "w")
-    file_write_line(f, "line one")
-    file_write_line(f, "line two")
-    file_close(f)
+    with open(TMP_FILE, "w") as f:
+        f.write_line("line one")
+        f.write_line("line two")
     test_assert(file_exists(TMP_FILE) == 1)
 
 
 @test
 def test_file_read_all() -> void:
-    f: file = file_open(TMP_FILE, "w")
-    file_write(f, "hello world")
-    file_close(f)
+    with open(TMP_FILE, "w") as f:
+        f.write("hello world")
 
-    r: file = file_open(TMP_FILE, "r")
-    content: str = file_read_all(r)
-    file_close(r)
+    r: file = open(TMP_FILE, "r")
+    content: str = r.read()
+    r.close()
     test_assert(str_len(content) == 11)
     test_assert(str_eq(content, str_new("hello world")) == 1)
 
 
 @test
 def test_file_write_int_and_float() -> void:
-    f: file = file_open(TMP_FILE, "w")
-    file_write_int(f, 42)
-    file_write(f, "\n")
-    file_write_float(f, 3.14)
-    file_write(f, "\n")
-    file_close(f)
+    with open(TMP_FILE, "w") as f:
+        f.write_int(42)
+        f.write("\n")
+        f.write_float(3.14)
+        f.write("\n")
     test_assert(file_exists(TMP_FILE) == 1)
     sz: int = file_size(TMP_FILE)
     test_assert(sz > 0)
@@ -42,17 +39,16 @@ def test_file_write_int_and_float() -> void:
 
 @test
 def test_file_read_line() -> void:
-    f: file = file_open(TMP_FILE, "w")
-    file_write_line(f, "alpha")
-    file_write_line(f, "beta")
-    file_write_line(f, "gamma")
-    file_close(f)
+    with open(TMP_FILE, "w") as f:
+        f.write_line("alpha")
+        f.write_line("beta")
+        f.write_line("gamma")
 
-    r: file = file_open(TMP_FILE, "r")
-    l1: str = file_read_line(r)
-    l2: str = file_read_line(r)
-    l3: str = file_read_line(r)
-    file_close(r)
+    r: file = open(TMP_FILE, "r")
+    l1: str = r.readline()
+    l2: str = r.readline()
+    l3: str = r.readline()
+    r.close()
     test_assert(str_eq(l1, str_new("alpha")) == 1)
     test_assert(str_eq(l2, str_new("beta")) == 1)
     test_assert(str_eq(l3, str_new("gamma")) == 1)
@@ -60,9 +56,8 @@ def test_file_read_line() -> void:
 
 @test
 def test_file_size() -> void:
-    f: file = file_open(TMP_FILE, "w")
-    file_write(f, "12345")
-    file_close(f)
+    with open(TMP_FILE, "w") as f:
+        f.write("12345")
     test_assert(file_size(TMP_FILE) == 5)
 
 
@@ -73,9 +68,8 @@ def test_file_not_exists() -> void:
 
 @test
 def test_remove_file() -> void:
-    f: file = file_open(TMP_FILE, "w")
-    file_write(f, "bye")
-    file_close(f)
+    with open(TMP_FILE, "w") as f:
+        f.write("bye")
     test_assert(file_exists(TMP_FILE) == 1)
     remove_file(TMP_FILE)
     test_assert(file_exists(TMP_FILE) == 0)

@@ -50,6 +50,7 @@ python3 mpy.py program.mpy --no-line-directives           # omit #line directive
 | `ptr[T]`      | `T*`               |                                    |
 | `const[T]`    | `const T`          |                                    |
 | `volatile[T]` | `volatile T`       |                                    |
+| `atomic[T]`   | `volatile T`       | use with `atomic_load/store/add/sub/cas` |
 | `thread_local[T]` | `MP_TLS T`     | per-thread storage (global or static local) |
 | `static[T]`   | `static T`         | static local — persists across calls        |
 | `array[T, N]` | `T[N]`             | fixed-size stack array             |
@@ -173,7 +174,7 @@ def clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return x
 ```
 
-Decorators: `@inline`, `@noinline`, `@noreturn`, `@cold`, `@hot`, `@extern`, `@staticmethod`.
+Decorators: `@inline`, `@noinline`, `@noreturn`, `@cold`, `@hot`, `@extern`, `@export`, `@staticmethod`.
 
 `-> None` is equivalent to `-> void`. `None` as a value emits `NULL` and is valid anywhere a pointer is expected:
 
@@ -417,13 +418,19 @@ def process() -> void:
 
 Free functions: `list_free(l)`, `str_free(s)`, `dict_free(d)`.
 
-**Arenas** — allocate many objects from a single region; free everything at once when the scope exits. Good for temporary work where individual lifetimes don't matter:
+**Arenas** — allocate many objects from a single region; free everything at once. Good for temporary work where individual lifetimes don't matter:
 
 ```python
-with arena_new() as a:
+def process() -> void:
+    a: arena = arena_new(65536)
+    defer(arena_free(a))
+
     lst: list = arena_list_new(a)
     s:   str  = arena_str_new(a, "scratch")
-    # a and all its allocations freed here automatically
+    list_append(lst, val_int(42))
+
+    arena_reset(a)   # discard all allocations without freeing the arena itself
+    # arena_free called on return via defer
 ```
 
 **Raw pointers** — `alloc`/`free` for manual byte-level control:
@@ -450,6 +457,18 @@ def add_vecs(a: array[f32, 1024], b: array[f32, 1024], out: array[f32, 1024]) ->
 v: vec[f32, 4] = ...
 ```
 
+### Compile-time evaluation
+
+```python
+@compile_time
+def gen_lookup() -> list:
+    return [i * i for i in range(16)]
+
+TABLE: array[int, 16] = gen_lookup()   # embedded as a C initializer
+```
+
+The decorated function runs in Python at compile time. The result must be a list of integers or floats matching the target array type.
+
 ### Generics
 
 ```python
@@ -457,22 +476,64 @@ v: vec[f32, 4] = ...
 def square(x: T) -> T:
     return x * x
 
-# Generates square_int64_t() and square_double()
+# Generates square_int() and square_float()
 ```
+
+### Loop unrolling
+
+```python
+@unroll(4)
+def sum_array(data: ptr[int], n: int) -> int:
+    total: int = 0
+    for i in range(0, n):
+        total = total + data[i]
+    return total
+```
+
+The `for`-`range` loop body is replicated `N` times in the emitted C. The loop variable and bounds are adjusted automatically.
+
+### Parallel loops
+
+```python
+@parallel(threads=4)
+def scale_array(data: ptr[float], n: int) -> void:
+    for i in range(0, n):
+        data[i] = data[i] * 2.0
+```
+
+The loop is split evenly across `threads` worker threads using `mp_parallel_for`. The function signature must take a pointer and a count; the loop variable must be the index.
+
+### Platform-specific functions
+
+```python
+@platform("windows")
+def sep() -> str:
+    return str_new("\\")
+
+@platform("linux", "macos")
+def sep() -> str:
+    return str_new("/")
+```
+
+Only the body matching the current platform is compiled. Multiple platforms can be listed. Valid values: `"windows"`, `"linux"`, `"macos"`.
 
 ### Traits
 
 ```python
 @trait
-class Printable:
-    def print_self(self) -> void: ...
+class Measurable:
+    def area(self) -> float: ...
+    def perimeter(self) -> float: ...
 
-@impl(Printable)
-struct MyType:
-    value: int
-    def print_self(self) -> void:
-        print(self.value)
+@impl(Measurable)
+struct Circle:
+    radius: float
+    def area(self) -> float:
+        return 3.14159 * self.radius * self.radius
+    def perimeter(self) -> float:
+        return 2.0 * 3.14159 * self.radius
 ```
+
 
 ### Modules
 
@@ -489,6 +550,50 @@ x: float = math_utils.lerp(0.0, 10.0, 0.5)
 y: float = lerp(0.0, 10.0, 0.25)
 ```
 
+### File I/O
+
+Files use Python-style method syntax. `open` and `with open` work as you'd expect:
+
+```python
+with open("/tmp/out.txt", "w") as f:
+    f.write("hello\n")
+    f.write_line("world")     # appends \n automatically
+    f.write_int(42)
+    f.write_float(3.14)
+
+r: file = open("/tmp/out.txt", "r")
+content: str = r.read()        # read entire file
+line:    str = r.readline()    # read one line
+eof:     int = r.eof()
+r.close()
+```
+
+When a `str` variable is passed to `f.write()`, it calls `mp_file_write_str` automatically. String literals and `cstr` go through the raw C write path.
+
+```python
+exists: int = file_exists("data.bin")
+size:   int = file_size("data.bin")
+remove_file("tmp.txt")
+rename_file("old.txt", "new.txt")
+```
+
+### Directories and paths
+
+```python
+dir_create("/tmp/mydir")
+dir_remove("/tmp/mydir")
+ok:  int = dir_exists("/tmp/mydir")
+cwd: str = dir_cwd()
+entries: list = dir_list(".")   # list of MpStr* names
+```
+
+```python
+base: str = path_basename("/home/user/file.txt")   # "file.txt"
+ext:  str = path_ext("photo.jpg")                  # ".jpg"
+dir:  str = path_dirname("/home/user/file.txt")    # "/home/user"
+p:    str = path_join("/tmp", "output.c")
+```
+
 ### Inline C
 
 ```python
@@ -500,25 +605,79 @@ def sleep_sec(n: int) -> void:
 
 ### Concurrency
 
+**Threads** — `thread_spawn` wraps arguments automatically; no `c_code` needed:
+
 ```python
-mutex: ptr[MpMutex] = mutex_new()
-mutex_lock(mutex)
+def worker(data: ptr[int], index: int, value: int) -> void:
+    data[index] = value * value
+
+def main() -> void:
+    results: array[int, 4] = {0}
+    t0: thread = thread_spawn(worker, results, 0, 3)
+    t1: thread = thread_spawn(worker, results, 1, 5)
+    thread_join(t0)
+    thread_join(t1)
+    # results[0] == 9, results[1] == 25
+```
+
+**Mutex**:
+
+```python
+m: mutex = mutex_new()
+defer(mutex_free(m))
+mutex_lock(m)
 # critical section
-mutex_unlock(mutex)
+mutex_unlock(m)
+```
 
-t: thread = thread_spawn(my_func, arg)
-thread_join(t)
+**Channels** — bounded MPMC queue:
 
-ch: ptr[MpChannel] = channel_new(16)
-channel_send(ch, val)
-channel_recv(ch, addr_of(out))
+```python
+ch: channel = channel_new(32)
+channel_send(ch, val_int(42))
+v: int = as_int(channel_recv_val(ch))
+channel_close(ch)
+results: list = channel_drain(ch)   # blocks until closed, collects all values
+channel_free(ch)
+```
 
-# Thread-local storage: each thread has its own copy
+**Condition variables**:
+
+```python
+c: cond  = cond_new()
+m: mutex = mutex_new()
+cond_wait(c, m)       # atomically unlock m and sleep
+cond_signal(c)        # wake one waiter
+cond_broadcast(c)     # wake all waiters
+```
+
+**Atomics** — lock-free operations on `volatile int64_t`:
+
+```python
+counter: array[int, 1] = {0}
+atomic_add(counter, 1)
+atomic_sub(counter, 1)
+v:   int = atomic_load(counter)
+atomic_store(counter, 99)
+old: int = atomic_cas(counter, 99, 0)   # compare-and-swap; returns previous value
+```
+
+**Thread-local storage** — each thread has its own copy:
+
+```python
 request_id: thread_local[int] = 0
 
 def handle() -> void:
     call_count: thread_local[int] = 0   # static local, persists per-thread
     call_count += 1
+```
+
+**Thread pool**:
+
+```python
+pool: threadpool = pool_new(4, 64)     # 4 threads, queue capacity 64
+pool_submit(pool, my_task, arg)
+pool_shutdown(pool)                    # waits for all tasks, then frees
 ```
 
 ### Hot-reloading
@@ -626,6 +785,34 @@ Compiler errors point directly to the `.mpy` source line via `#line` directives:
 tests/my_prog.mpy:12:5: error: use of undeclared identifier 'typo'
 ```
 
+## Benchmark
+
+`bench/bench.mpy` is a dual-mode file that runs as plain Python and compiles with micropy. `bench/run.py` builds the binary with `-O2`, runs both, and prints a comparison:
+
+```
+benchmark             python ms   micropy ms   speedup
+--------------------  ----------  ----------  --------
+float_sum                   1373           8      171x
+leibniz_pi                  2451          14      175x
+int_sum                     1215           7      173x
+fib_36                      4868         112       43x
+```
+
+Run it:
+
+```sh
+cd bench
+python3 run.py
+```
+
+## Generated header rules
+
+Generated `.h` files include only `micropy_types.h` — a minimal header containing forward declarations, `stdint.h`, and `stddef.h`. They never include `micropy_rt.h`, `stdio.h`, `pthread.h`, or any other heavy header.
+
+The full runtime is included exactly once, in the generated `.c` file. Each `.c` includes its own `.h`, which transitively brings in any project module dependencies.
+
+This means including a micropy module header in C++ or C code never silently pulls in platform headers. Compile times stay flat as the project grows.
+
 ## Project structure
 
 | File               | Purpose                                  |
@@ -636,5 +823,9 @@ tests/my_prog.mpy:12:5: error: use of undeclared identifier 'typo'
 | `codegen_exprs.py` | Expression code generation               |
 | `type_map.py`      | Type annotation → C type mapping         |
 | `build.py`         | Build script interpreter                 |
-| `micropy_rt.h`     | Runtime: strings, lists, dicts, I/O, … |
+| `micropy_types.h`  | Forward declarations only — safe to include from any generated header |
+| `micropy_rt.h`     | Full runtime: strings, lists, dicts, I/O, concurrency, … |
 | `micropy_test.h`   | Test runner infrastructure               |
+| `micropy.py`       | IDE stubs — add `from micropy import *` to suppress linter warnings |
+| `bench/bench.mpy`  | Benchmark suite (runs as Python or compiled micropy) |
+| `bench/run.py`     | Build + run benchmark, print speedup table |
