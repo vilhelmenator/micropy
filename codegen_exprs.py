@@ -570,6 +570,7 @@ class ExprMixin:
                 "arena_reset": "mp_arena_reset", "arena_alloc": "mp_arena_alloc",
                 "arena_list_new": "mp_arena_list_new",
                 "arena_str_new": "mp_arena_str_new",
+                "open": "mp_file_open",
                 "file_open": "mp_file_open", "file_open_safe": "mp_file_open_safe",
                 "file_close": "mp_file_close",
                 "file_write": "mp_file_write", "file_write_str": "mp_file_write_str",
@@ -676,6 +677,30 @@ class ExprMixin:
                     return raw
                 if attr == "len" and not node.args:
                     return f"mp_list_len({obj_str})"
+
+            # MpFile method dispatch  (f.write(...), f.read(), etc.)
+            if obj_type == "MpFile":
+                _file_methods = {
+                    "write_line":  "mp_file_write_line",
+                    "write_int":   "mp_file_write_int",
+                    "write_float": "mp_file_write_float",
+                    "close":       "mp_file_close",
+                    "eof":         "mp_file_eof",
+                }
+                if attr in _file_methods:
+                    return f"{_file_methods[attr]}({obj_str}, {arg_str})" if arg_str else f"{_file_methods[attr]}({obj_str})"
+                if attr == "write" and len(node.args) == 1:
+                    arg_node = node.args[0]
+                    arg_val = self.compile_expr(arg_node)
+                    # String constants compile to char* literals — use write, not write_str
+                    is_str_obj = (not isinstance(arg_node, ast.Constant) and
+                                  self.infer_type(arg_node) == "MpStr*")
+                    fn = "mp_file_write_str" if is_str_obj else "mp_file_write"
+                    return f"{fn}({obj_str}, {arg_val})"
+                if attr == "read" and not node.args:
+                    return f"mp_file_read_all({obj_str})"
+                if attr == "readline" and not node.args:
+                    return f"mp_file_read_line({obj_str})"
 
             base = obj_type.rstrip("*").strip()
             if obj_type.endswith("*") or base in self.structs:

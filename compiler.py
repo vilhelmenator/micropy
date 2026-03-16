@@ -313,6 +313,7 @@ class Compiler(StmtMixin, ExprMixin):
                 "getenv": "MpStr*",
                 "val_int": "MpVal", "val_float": "MpVal",
                 "val_str": "MpVal", "as_int": "int64_t", "as_float": "double",
+                "open": "MpFile",
                 "file_open": "MpFile", "file_open_safe": "MpFile",
                 "file_read_all": "MpStr*", "file_read_line": "MpStr*",
                 "file_eof": "int", "file_exists": "int", "file_size": "int64_t",

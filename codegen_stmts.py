@@ -782,6 +782,8 @@ class StmtMixin:
 
     def _infer_cleanup(self, open_func: str):
         """Infer cleanup function from open/create function name."""
+        if open_func == "open":
+            return "file_close"
         for suffix, close_suffix in [("_open", "_close"), ("_new", "_free"),
                                       ("_create", "_destroy"), ("_init", "_deinit")]:
             if open_func.endswith(suffix):
