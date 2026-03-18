@@ -106,6 +106,74 @@ def extract_x(out: ptr[float], n: int) -> void:
         i += 1
 
 # ---------------------------------------------------------------------------
+# 5. Restrict with short arrays
+#    4 ptr[float] params, N=64, called 50M times.
+#    Without restrict the compiler emits a runtime overlap-check preamble on
+#    every call. With restrict (all 4 params non-aliasing) it goes straight
+#    into the vectorised body — preamble cost is a large fraction of per-call
+#    work at N=64.
+# ---------------------------------------------------------------------------
+RESTRICT_N:    const = 64
+RESTRICT_REPS: const = 50_000_000
+
+@noinline
+def fused_mad(out: ptr[float], a: ptr[float], b: ptr[float], c: ptr[float], n: int) -> void:
+    i: int = 0
+    while i < n:
+        out[i] = a[i] * b[i] + c[i]
+        i += 1
+
+# ---------------------------------------------------------------------------
+# 6. Hot/cold splitting
+#    Three validation raises → three __attribute__((cold,noreturn)) helpers.
+#    The hot path contains only the useful loop; cold error-handling code is
+#    moved out of the instruction stream, shrinking the hot-path footprint and
+#    reducing I-cache pressure when called from a tight loop.
+# ---------------------------------------------------------------------------
+HOT_N:    const = 256
+HOT_REPS: const = 5_000_000
+
+@noinline
+def validated_sum(data: ptr[int], n: int) -> int:
+    if data is None:
+        raise "validated_sum: data pointer is NULL — caller must supply a non-null array"
+    if n <= 0:
+        raise "validated_sum: n must be positive — received a zero or negative length"
+    if n > 10_000_000:
+        raise "validated_sum: n exceeds maximum allowed size — possible buffer overflow"
+    total: int = 0
+    i: int = 0
+    while i < n:
+        total = total + data[i]
+        i += 1
+    return total
+
+# ---------------------------------------------------------------------------
+# 7. Linked-list pointer-chase with prefetch
+#    Nodes linked in a stride-permutation (stride=1,999,993 is coprime to 2M)
+#    so every hop skips ~16 MB of address space → L3 miss on every node.
+#    micropy inserts MP_PREFETCH(head->next->next, 0, 1) before the load,
+#    overlapping the next fetch with processing of the current node.
+# ---------------------------------------------------------------------------
+LIST_N:    const = 1_500_007   # prime → any step gives full cycle
+LIST_STEP: const = 750_013     # ~ N/2, prime → jumps of ~12 MB defeat hardware prefetcher
+LIST_REPS: const = 20
+
+class Node:
+    value: int
+    next: ptr[Node]
+
+list_nodes: array[Node, 1500007]
+
+@noinline
+def walk_list(head: ptr[Node]) -> int:
+    total: int = 0
+    while head is not None:
+        total = total + head.value
+        head = head.next
+    return total
+
+# ---------------------------------------------------------------------------
 # Micropy entry point (compiled only)
 # ---------------------------------------------------------------------------
 def main() -> int:
@@ -175,6 +243,67 @@ def main() -> int:
     t7: int = time_ms()
     printf("%-20s  %12.6f  %8d\n", "soa_sum", soa_out[SOA_N / 2], t7 - t6)
     free(soa_out)
+
+    # ---------- restrict_short -----------------------------------------------
+    rm_out: ptr[float] = alloc(RESTRICT_N * 8)
+    rm_a:   ptr[float] = alloc(RESTRICT_N * 8)
+    rm_b:   ptr[float] = alloc(RESTRICT_N * 8)
+    rm_c:   ptr[float] = alloc(RESTRICT_N * 8)
+    i = 0
+    while i < RESTRICT_N:
+        rm_a[i] = float(i) * 0.1
+        rm_b[i] = float(i) * 0.2
+        rm_c[i] = float(i) * 0.05
+        i += 1
+    t8: int = time_ms()
+    r = 0
+    while r < RESTRICT_REPS:
+        fused_mad(rm_out, rm_a, rm_b, rm_c, RESTRICT_N)
+        r += 1
+    t9: int = time_ms()
+    printf("%-20s  %12.6f  %8d\n", "restrict_short", rm_out[RESTRICT_N / 2], t9 - t8)
+    free(rm_out)
+    free(rm_a)
+    free(rm_b)
+    free(rm_c)
+
+    # ---------- hot_cold ------------------------------------------------------
+    hc_data: ptr[int] = alloc(HOT_N * 8)
+    i = 0
+    while i < HOT_N:
+        hc_data[i] = i + 1
+        i += 1
+    hc_total: int = 0
+    t10: int = time_ms()
+    r = 0
+    while r < HOT_REPS:
+        hc_data[0] = r % 127 + 1   # vary input to prevent loop-invariant hoisting
+        hc_total = hc_total + validated_sum(hc_data, HOT_N)
+        r += 1
+    t11: int = time_ms()
+    printf("%-20s  %12d  %8d\n", "hot_cold", hc_total % 1_000_000, t11 - t10)
+    free(hc_data)
+
+    # ---------- linked_list ---------------------------------------------------
+    ll_idx: int = 0
+    i = 0
+    while i < LIST_N - 1:
+        ll_next: int = (ll_idx + LIST_STEP) % LIST_N
+        list_nodes[ll_idx].value = ll_idx % 100
+        list_nodes[ll_idx].next = addr_of(list_nodes[ll_next])
+        ll_idx = ll_next
+        i += 1
+    list_nodes[ll_idx].value = ll_idx % 100
+    list_nodes[ll_idx].next = None
+    ll_result: int = 0
+    t12: int = time_ms()
+    r = 0
+    while r < LIST_REPS:
+        list_nodes[0].value = r    # vary input to prevent loop-invariant hoisting
+        ll_result = walk_list(addr_of(list_nodes[0]))
+        r += 1
+    t13: int = time_ms()
+    printf("%-20s  %12d  %8d\n", "linked_list", ll_result % 1_000_000, t13 - t12)
 
     free(out)
     free(x)

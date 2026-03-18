@@ -24,10 +24,13 @@ FLAGS     = ["-O2", "-march=native"]
 CC        = os.environ.get("CC", "cc")
 
 NOTES = {
-    "saxpy":       "restrict → no aliasing-check prelude",
-    "strided_sum": "constant specialisation (stride=4 folded in)",
-    "small_alloc": "alloca substitution (no malloc/free per call)",
-    "soa_sum":     "@soa → 8B/elem read vs 64B/elem AoS (8-field struct, extract one field)",
+    "saxpy":          "restrict → no aliasing-check prelude",
+    "strided_sum":    "constant specialisation (stride=4 folded in)",
+    "small_alloc":    "alloca substitution (no malloc/free per call)",
+    "soa_sum":        "@soa → 8B/elem read vs 64B/elem AoS (8-field struct, extract one field)",
+    "restrict_short": "restrict → no overlap-check preamble (N=64, cost is large fraction of call)",
+    "hot_cold":       "hot/cold split → 3 error paths outlined, hot loop fits in fewer cache lines",
+    "linked_list":    "prefetch(next->next) → hides L3 miss latency on pointer-chase traversal",
 }
 
 # Python runs with smaller problem sizes; scale ms up to the C-scale workload
@@ -105,11 +108,14 @@ for name in names:
     naive_ms = naive_rows.get(name, 0)
     mpy_ms   = mpy_rows.get(name, 1)
 
-    py_scaled = int(py_ms * PY_SCALE.get(name, 1.0))
-    speedup   = f"{naive_ms / mpy_ms:.1f}x" if mpy_ms > 0 else "—"
-    note      = NOTES.get(name, "")
+    if py_ms and name in PY_SCALE:
+        py_col = f"{int(py_ms * PY_SCALE[name]):>10}"
+    else:
+        py_col = f"{'—':>10}"
+    speedup = f"{naive_ms / mpy_ms:.1f}x" if mpy_ms > 0 else "—"
+    note    = NOTES.get(name, "")
 
-    print(f"{name:<20}  {py_scaled:>10}  {naive_ms:>10}  {mpy_ms:>10}  {speedup:>8}  {note}")
+    print(f"{name:<20}  {py_col}  {naive_ms:>10}  {mpy_ms:>10}  {speedup:>8}  {note}")
 
 print()
 print("Notes:")

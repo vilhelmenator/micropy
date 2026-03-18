@@ -910,20 +910,25 @@ python3 run.py
 
 ### Compiler optimizations vs naive C
 
-`bench/run_opts.py` builds three versions of the same algorithms — Python, hand-written idiomatic C, and micropy — and prints a side-by-side comparison. It demonstrates four automatic micropy optimizations:
+`bench/run_opts.py` builds three versions of the same algorithms — Python, hand-written idiomatic C, and micropy — and prints a side-by-side comparison. It demonstrates seven automatic micropy optimizations:
 
 ```
 benchmark              python ms  naive C ms  micropy ms   speedup  optimization
 --------------------  ----------  ----------  ----------  --------  ----------------------------------------
-saxpy                      23400         132         141      0.9x  restrict → no aliasing-check prelude
-strided_sum                 5080          93          96      1.0x  constant specialisation (stride=4 folded in)
-small_alloc                49250         213          38      5.6x  alloca substitution (no malloc/free per call)
-soa_sum                    24000         119          30      4.0x  @soa → 8B/elem read vs 64B/elem AoS (8-field struct)
+saxpy                      23200         134         134      1.0x  restrict → no aliasing-check prelude
+strided_sum                 5080          94          94      1.0x  constant specialisation (stride=4 folded in)
+small_alloc                49000         198          38      5.2x  alloca substitution (no malloc/free per call)
+soa_sum                    32600         123          30      4.1x  @soa → 8B/elem read vs 64B/elem AoS (8-field struct, extract one field)
+restrict_short                 —         542         548      1.0x  restrict → no overlap-check preamble (N=64, cost is large fraction of call)
+hot_cold                       —          72          74      1.0x  hot/cold split → 3 error paths outlined, hot loop fits in fewer cache lines
+linked_list                    —         943         962      1.0x  prefetch(next->next) → hides L3 miss latency on pointer-chase traversal
 ```
 
-- **saxpy / strided_sum** — Apple Clang at `-O2 -march=native` already applies runtime aliasing checks and constant propagation that match micropy's restrict/specialisation output on this target; speedup is architecture-dependent and more visible on older x86 toolchains.
-- **small_alloc** — `alloca` substitution is a real win everywhere: stack allocation costs ~1 ns (one `sub rsp` instruction) vs 30–100 ns for `malloc/free` on typical allocators. 5.6× with 5 M calls to a 512-byte scratch-buffer function.
-- **soa_sum** — the `@soa` benchmark extracts one field from a particle array (8 fields, 64 B/particle). AoS loads a full 64-byte cache line to get 8 B of `.x`; SoA reads only the `particles_x[]` stream (8 B/element). 4× speedup at 5 M particles, `@noinline` on both sides to prevent the optimizer from collapsing the rep loop.
+- **small_alloc** — `alloca` substitution is a real win everywhere: stack allocation costs ~1 ns (one `sub rsp` instruction) vs 30–100 ns for `malloc/free` on typical allocators. 5.2× with 5 M calls to a 512-byte scratch-buffer function.
+- **soa_sum** — the `@soa` benchmark extracts one field from a particle array (8 fields, 64 B/particle). AoS loads a full 64-byte cache line to get 8 B of `.x`; SoA reads only the `particles_x[]` stream (8 B/element). 4.1× speedup at 5 M particles, `@noinline` on both sides to prevent the optimizer from collapsing the rep loop.
+- **saxpy / strided_sum / restrict_short** — Apple Clang at `-O2 -march=native` on Apple Silicon already applies vectorization strategies that match micropy's `restrict` and constant-specialisation output on this target; speedup is architecture-dependent and more visible on x86 toolchains where the overlap-check preamble is costlier.
+- **hot_cold** — micropy outlines all three `raise` branches into `static __attribute__((cold, noreturn))` helpers, keeping the hot loop in fewer I-cache lines. The benefit is measurable under I-cache pressure from a larger surrounding binary; Apple Silicon's large L1-I cache absorbs the inline cold paths on this isolated benchmark.
+- **linked_list** — micropy inserts `MP_PREFETCH(head->next->next, 0, 1)` before each pointer-chase load. The list is built with a stride-permuted layout (~12 MB hops) to defeat hardware prefetchers. Apple Silicon's stream-detection hardware is unusually aggressive and partially covers irregular pointer-chase patterns; the prefetch benefit is larger on Intel/AMD where L3-miss latency is higher relative to core speed.
 
 ```sh
 cd bench
@@ -955,5 +960,5 @@ This means including a micropy module header in C++ or C code never silently pul
 | `bench/bench.mpy`        | Basic benchmark suite (Python vs micropy)                   |
 | `bench/run.py`           | Build + run basic benchmark, print speedup table            |
 | `bench/bench_opts.mpy`   | Optimization contrast benchmark (Python + micropy)          |
-| `bench/bench_opts_naive.c` | Same algorithms in idiomatic C without micropy optimizations |
-| `bench/run_opts.py`      | Build + run all three variants, print 4-column comparison   |
+| `bench/bench_opts_naive.c` | Same 7 algorithms in idiomatic C without micropy optimizations |
+| `bench/run_opts.py`      | Build + run all three variants, print 7-row comparison table |
