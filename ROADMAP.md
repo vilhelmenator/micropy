@@ -55,7 +55,7 @@ The correctness pass costs nothing at runtime; all of it is compile-time analysi
 
 ### Warnings *(intraprocedural + one call-boundary)*
 
-- [ ] **Static leak detection**
+- [x] **Static leak detection**
   Fork the live-allocation set at each `if/else` branch, merge at the join point.
   At every `return` and `raise`, check for live allocations neither freed, returned,
   nor passed to a Consumer. With function tags: a variable that received its value
@@ -122,7 +122,7 @@ Items marked ✅ are already implemented.
 - ✅ **`@hot` struct cache-line alignment**
   `@hot` on a struct emits `__attribute__((aligned(64)))`.
 
-- [ ] **Read-only inference (`const T*`)**
+- [x] **Read-only inference (`const T*`)**
   Scan each function body for writes through `ptr[T]` parameters. If none found,
   emit `const T*`. Hard aliasing promise to the C compiler — unlocks vectorization
   and instruction reordering it would otherwise refuse. Detection is a single AST

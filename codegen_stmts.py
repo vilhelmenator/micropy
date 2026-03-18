@@ -16,6 +16,34 @@ _ALLOC_FUNCS = frozenset({"alloc", "alloc_safe", "mp_alloc"})
 _FREE_FUNCS  = frozenset({"free",  "mp_free"})
 
 
+def _ptr_is_written(body, param_name: str) -> bool:
+    """Return True if param_name is ever written through in body.
+
+    A write-through is any assignment whose LHS root is param_name and
+    whose immediate LHS is a Subscript or Attribute node, e.g.:
+      param[i] = v        (Subscript write)
+      param.field = v     (Attribute write)
+      param[i] += v       (AugAssign Subscript)
+    """
+    def _root(target) -> str:
+        while isinstance(target, (ast.Subscript, ast.Attribute)):
+            target = target.value
+        return target.id if isinstance(target, ast.Name) else ""
+
+    for stmt in body:
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (isinstance(target, (ast.Subscript, ast.Attribute))
+                            and _root(target) == param_name):
+                        return True
+            elif isinstance(node, ast.AugAssign):
+                if (isinstance(node.target, (ast.Subscript, ast.Attribute))
+                        and _root(node.target) == param_name):
+                    return True
+    return False
+
+
 class StmtMixin:
     # -------------------------------------------------------------------
     # Enum detection
@@ -262,8 +290,17 @@ class StmtMixin:
                     if hasattr(self, '_funcptr_rettypes'):
                         self._funcptr_rettypes[arg.arg] = ret
                     continue
-            args.append(f"{atype} {arg.arg}")
-            self.func_args[arg.arg] = atype
+            # Read-only inference: ptr param never written through → const T*
+            # Applied to both prototype and definition so they stay in sync.
+            const_prefix = ""
+            if (atype.endswith("*")
+                    and not atype.startswith("const ")
+                    and atype != "void*"
+                    and arg.arg != "self"
+                    and not _ptr_is_written(node.body, arg.arg)):
+                const_prefix = "const "
+            args.append(f"{const_prefix}{atype} {arg.arg}")
+            self.func_args[arg.arg] = atype  # store without const for type inference
 
         arg_str = ", ".join(args) if args else "void"
         if node.args.vararg is not None:

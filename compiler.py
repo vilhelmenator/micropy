@@ -8,7 +8,7 @@ from typing import Optional
 
 from type_map import TYPE_MAP, ALIAS_MAP, TUPLE_RET_MAP, map_type, mangle_type, get_array_info, get_typed_list_elem, gen_typed_list, get_funcptr_info
 import type_map as _type_map_mod
-from codegen_stmts import StmtMixin, _ALLOC_FUNCS, _FREE_FUNCS
+from codegen_stmts import StmtMixin, _ALLOC_FUNCS, _FREE_FUNCS, _ptr_is_written
 from codegen_exprs import ExprMixin
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -304,6 +304,150 @@ class Compiler(StmtMixin, ExprMixin):
                     for item in node.body:
                         if isinstance(item, ast.FunctionDef):
                             _tag_func(item, prefix=f"{node.name}_")
+
+    # -------------------------------------------------------------------
+    # Static leak detection
+    # -------------------------------------------------------------------
+
+    def _check_leaks(self, tree, filepath: str) -> None:
+        """Entry point: run leak detection over every non-trivial function."""
+        skip_decs = frozenset({"extern", "compile_time", "trait", "generic", "test"})
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, ast.FunctionDef):
+                if not any(d in self.get_decorators(node) for d in skip_decs):
+                    self._check_leaks_func(node, filepath)
+            elif isinstance(node, ast.ClassDef):
+                decs = self.get_decorators(node)
+                if "trait" not in decs and not self._is_enum_class(node):
+                    for item in node.body:
+                        if isinstance(item, ast.FunctionDef):
+                            self._check_leaks_func(item, filepath)
+
+    def _check_leaks_func(self, func_node: ast.FunctionDef, filepath: str) -> None:
+        """Path-sensitive leak analysis for one function. Warns to stderr."""
+        # Skip vars the compiler already auto-frees or that legitimately escape
+        classify = self._escape_classify(func_node)
+        skip_vars = {v for v, st in classify.items() if st in ("local_only", "escaping")}
+
+        def warn(lineno: int, var: str, alloc_line: int) -> None:
+            print(
+                f"{filepath}:{lineno}: warning: '{var}' allocated at line {alloc_line}"
+                f" may not be freed on this path",
+                file=sys.stderr,
+            )
+
+        def is_owned_rhs(call_node) -> bool:
+            """True if a call allocates memory the caller must manage."""
+            if not (isinstance(call_node, ast.Call)
+                    and isinstance(call_node.func, ast.Name)):
+                return False
+            fname = call_node.func.id
+            return (fname in _ALLOC_FUNCS
+                    or "producer" in self.func_alloc_tags.get(fname, frozenset()))
+
+        def discharge(call_node, live: dict) -> None:
+            """Remove ownership of args passed to free() / Consumer / Stores."""
+            if not isinstance(call_node.func, ast.Name):
+                return
+            fname = call_node.func.id
+            tags = self.func_alloc_tags.get(fname, frozenset())
+            if fname in _FREE_FUNCS or "consumer" in tags or "stores" in tags:
+                for arg in call_node.args:
+                    if isinstance(arg, ast.Name):
+                        live.pop(arg.id, None)
+
+        def analyze_body(stmts, live: dict):
+            """Process a statement list. Returns updated live dict, or None if
+            every path through these statements exits (return/raise)."""
+            live = dict(live)
+            for stmt in stmts:
+                live = analyze_stmt(stmt, live)
+                if live is None:
+                    return None
+            return live
+
+        def analyze_stmt(stmt, live: dict):
+            """Returns updated live dict, or None if this statement always exits."""
+            lineno = getattr(stmt, "lineno", 0)
+
+            # x: ptr[T] = alloc(...) or x: ptr[T] = producer()
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                name = stmt.target.id
+                if stmt.value:
+                    if isinstance(stmt.value, ast.Call):
+                        discharge(stmt.value, live)
+                    if name not in skip_vars and is_owned_rhs(stmt.value):
+                        live[name] = lineno
+                return live
+
+            # x = alloc(...) or x = producer()
+            if isinstance(stmt, ast.Assign):
+                if isinstance(stmt.value, ast.Call):
+                    discharge(stmt.value, live)
+                for t in stmt.targets:
+                    if isinstance(t, ast.Name) and t.id not in skip_vars:
+                        if is_owned_rhs(stmt.value):
+                            live[t.id] = lineno
+                return live
+
+            # Bare call expression: free(x), consume(x)
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+                discharge(stmt.value, live)
+                return live
+
+            # return — warn about live vars that aren't the returned value
+            if isinstance(stmt, ast.Return):
+                returned = (stmt.value.id
+                            if stmt.value and isinstance(stmt.value, ast.Name)
+                            else None)
+                for var, alloc_line in live.items():
+                    if var != returned:
+                        warn(lineno, var, alloc_line)
+                return None  # path exits
+
+            # raise — warn about all live vars
+            if isinstance(stmt, ast.Raise):
+                for var, alloc_line in live.items():
+                    warn(lineno, var, alloc_line)
+                return None  # path exits
+
+            # if / else — fork, recurse, merge surviving live sets
+            if isinstance(stmt, ast.If):
+                for n in ast.walk(stmt.test):
+                    if isinstance(n, ast.Call):
+                        discharge(n, live)
+                live_then = analyze_body(stmt.body, live)
+                live_else = (analyze_body(stmt.orelse, live)
+                             if stmt.orelse else dict(live))
+                if live_then is None and live_else is None:
+                    return None
+                if live_then is None:
+                    return live_else
+                if live_else is None:
+                    return live_then
+                merged = dict(live_then)
+                for var, loc in live_else.items():
+                    if var not in merged:
+                        merged[var] = loc
+                return merged
+
+            # while / for — analyze body once (conservative: don't model iterations)
+            if isinstance(stmt, (ast.While, ast.For)):
+                analyze_body(stmt.body, dict(live))
+                return live
+
+            # with — analyze body
+            if isinstance(stmt, ast.With):
+                result = analyze_body(stmt.body, live)
+                return live if result is None else result
+
+            return live
+
+        final = analyze_body(func_node.body, {})
+        if final:
+            end_line = getattr(func_node, "end_lineno", func_node.lineno)
+            for var, alloc_line in final.items():
+                warn(end_line, var, alloc_line)
 
     # -------------------------------------------------------------------
     # Type inference
@@ -844,6 +988,9 @@ class Compiler(StmtMixin, ExprMixin):
 
         # Build allocation signature tags for every function in this module
         self._build_alloc_tags(tree)
+
+        # Static leak detection — warns to stderr, no effect on codegen
+        self._check_leaks(tree, self._current_file or filepath)
 
         # ---- Process imports ----
         for node in ast.iter_child_nodes(tree):
@@ -1394,7 +1541,14 @@ class Compiler(StmtMixin, ExprMixin):
 
         for arg in node.args.args:
             atype = map_type(arg.annotation)
-            args.append(f"{atype} {arg.arg}")
+            const_prefix = ""
+            if (atype.endswith("*")
+                    and not atype.startswith("const ")
+                    and atype != "void*"
+                    and arg.arg != "self"
+                    and not _ptr_is_written(node.body, arg.arg)):
+                const_prefix = "const "
+            args.append(f"{const_prefix}{atype} {arg.arg}")
             self.func_args[arg.arg] = atype
 
         arg_str = ", ".join(args) if args else "void"
@@ -1506,7 +1660,13 @@ class Compiler(StmtMixin, ExprMixin):
         self.emit(f"}}")
         self.emit("")
 
-        arg_str = ", ".join(f"{t} {n}" for n, t in args) if args else "void"
+        def _const_arg(aname, atype):
+            if (atype.endswith("*") and not atype.startswith("const ")
+                    and atype != "void*" and aname != "self"
+                    and not _ptr_is_written(node.body, aname)):
+                return f"const {atype} {aname}"
+            return f"{atype} {aname}"
+        arg_str = ", ".join(_const_arg(n, t) for n, t in args) if args else "void"
         self.emit(f"{ret_type} {full_name}({arg_str}) {{")
         self.indent += 1
         self.emit(f"int64_t _total = {range_end} - {range_start};")
@@ -1629,7 +1789,14 @@ class Compiler(StmtMixin, ExprMixin):
                     fp_arg_str = ", ".join(fp_args) if fp_args else "void"
                     args.append(f"{r} (*{arg.arg})({fp_arg_str})")
                     continue
-            args.append(f"{atype} {arg.arg}")
+            const_prefix = ""
+            if (atype.endswith("*")
+                    and not atype.startswith("const ")
+                    and atype != "void*"
+                    and arg.arg != "self"
+                    and not _ptr_is_written(node.body, arg.arg)):
+                const_prefix = "const "
+            args.append(f"{const_prefix}{atype} {arg.arg}")
         arg_str = ", ".join(args) if args else "void"
         if node.args.vararg is not None:
             arg_str = (arg_str + ", ..." if args else "...")
