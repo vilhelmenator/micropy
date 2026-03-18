@@ -11,6 +11,15 @@
 #include <time.h>
 #include <math.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <malloc.h>   /* alloca on MSVC/clang-cl */
+/* Undefine any conflicting Windows macros */
+#ifdef Rectangle
+#undef Rectangle
+#endif
+#endif
+
 struct MpList {
     MpVal* data;
     int64_t len;
@@ -305,11 +314,6 @@ static inline MpStr* mp_getenv(const char* name) {
 /* Cross-platform thread primitives */
 
 #ifdef _WIN32
-#include <windows.h>
-/* Undefine any conflicting Windows macros */
-#ifdef Rectangle
-#undef Rectangle
-#endif
 
 struct MpThread { HANDLE _t; };
 struct MpMutex  { CRITICAL_SECTION _m; };

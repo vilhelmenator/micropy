@@ -16,6 +16,10 @@
 #include <stdint.h>
 #include <time.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #define N           4000000
 #define REPS        100
 #define STRIDED_N   1000000
@@ -37,9 +41,13 @@ typedef struct { double x, y, z, vx, vy, vz, mass, charge; } Particle;
 static Particle particles[SOA_N];
 
 static int64_t ms_now(void) {
+#ifdef _WIN32
+    return (int64_t)GetTickCount64();
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#endif
 }
 
 /* No restrict — compiler must add a runtime aliasing-check prelude or

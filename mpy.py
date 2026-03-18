@@ -87,15 +87,16 @@ def build_once(args, source_dir) -> bool:
     extra_flags = shlex.split(getattr(args, 'flags', '') or '')
     if getattr(args, 'debug', False):
         extra_flags = ["-DMICROPY_DEBUG"] + extra_flags
+    link_math = [] if sys.platform == "win32" else ["-lm"]
     if getattr(args, 'shared', False):
         if is_msvc:
             cmd = [args.cc] + c_files + [f"/Fe{out_name}", "/nologo", "/Z7", "/LD"] + extra_flags
         else:
-            cmd = [args.cc, "-g", "-shared", "-fPIC"] + c_files + ["-o", out_name, "-lm"] + extra_flags
+            cmd = [args.cc, "-g", "-shared", "-fPIC"] + c_files + ["-o", out_name] + link_math + extra_flags
     elif is_msvc:
         cmd = [args.cc] + c_files + [f"/Fe{out_name}", "/nologo", "/Z7"] + extra_flags
     else:
-        cmd = [args.cc, "-g"] + c_files + ["-o", out_name, "-lm"] + extra_flags
+        cmd = [args.cc, "-g"] + c_files + ["-o", out_name] + link_math + extra_flags
     print(f"Running: {' '.join(cmd)}")
 
     result = subprocess.run(cmd, capture_output=True, text=True)

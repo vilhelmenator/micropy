@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-run_opts.py — compare Python, naive C, and micropy-optimized C.
+run_opts.py -- compare Python, naive C, and micropy-optimized C.
 
 Shows the effect of micropy's automatic optimizations (restrict inference,
 constant specialization, alloca substitution for local scratch buffers)
@@ -18,19 +18,20 @@ import os
 ROOT      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BENCH_MPY = os.path.join(ROOT, "bench", "bench_opts.mpy")
 NAIVE_SRC = os.path.join(ROOT, "bench", "bench_opts_naive.c")
-MPY_BIN   = os.path.join(ROOT, "bench", "bench_opts")
-NAIVE_BIN = os.path.join(ROOT, "bench", "bench_opts_naive")
+_EXE      = ".exe" if sys.platform == "win32" else ""
+MPY_BIN   = os.path.join(ROOT, "bench", "bench_opts") + _EXE
+NAIVE_BIN = os.path.join(ROOT, "bench", "bench_opts_naive") + _EXE
 FLAGS     = ["-O2", "-march=native"]
 CC        = os.environ.get("CC", "cc")
 
 NOTES = {
-    "saxpy":          "restrict → no aliasing-check prelude",
+    "saxpy":          "restrict -> no aliasing-check prelude",
     "strided_sum":    "constant specialisation (stride=4 folded in)",
     "small_alloc":    "alloca substitution (no malloc/free per call)",
-    "soa_sum":        "@soa → 8B/elem read vs 64B/elem AoS (8-field struct, extract one field)",
-    "restrict_short": "restrict → no overlap-check preamble (N=64, cost is large fraction of call)",
-    "hot_cold":       "hot/cold split → 3 error paths outlined, hot loop fits in fewer cache lines",
-    "linked_list":    "prefetch(next->next) → hides L3 miss latency on pointer-chase traversal",
+    "soa_sum":        "@soa -> 8B/elem read vs 64B/elem AoS (8-field struct, extract one field)",
+    "restrict_short": "restrict -> no overlap-check preamble (N=64, cost is large fraction of call)",
+    "hot_cold":       "hot/cold split -> 3 error paths outlined, hot loop fits in fewer cache lines",
+    "linked_list":    "prefetch(next->next) -> hides L3 miss latency on pointer-chase traversal",
 }
 
 # Python runs with smaller problem sizes; scale ms up to the C-scale workload
@@ -47,7 +48,10 @@ def run(cmd, env=None):
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if result.returncode != 0:
         print("FAILED:", " ".join(str(c) for c in cmd), file=sys.stderr)
-        print(result.stderr, file=sys.stderr)
+        if result.stdout:
+            print(result.stdout, file=sys.stderr)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
         sys.exit(1)
     return result.stdout.strip()
 
@@ -69,7 +73,7 @@ def parse_rows(output):
 print("Building micropy version ...")
 run(
     [sys.executable, os.path.join(ROOT, "mpy.py"), BENCH_MPY,
-     f"--flags={' '.join(FLAGS)}"],
+     f"--cc={CC}", f"--flags={' '.join(FLAGS)}"],
     env={**os.environ, "PYTHONPATH": ROOT},
 )
 
@@ -111,14 +115,14 @@ for name in names:
     if py_ms and name in PY_SCALE:
         py_col = f"{int(py_ms * PY_SCALE[name]):>10}"
     else:
-        py_col = f"{'—':>10}"
-    speedup = f"{naive_ms / mpy_ms:.1f}x" if mpy_ms > 0 else "—"
+        py_col = f"{'--':>10}"
+    speedup = f"{naive_ms / mpy_ms:.1f}x" if mpy_ms > 0 else "--"
     note    = NOTES.get(name, "")
 
     print(f"{name:<20}  {py_col}  {naive_ms:>10}  {mpy_ms:>10}  {speedup:>8}  {note}")
 
 print()
 print("Notes:")
-print("  python ms  — scaled from smaller problem size to match C workload")
-print("  speedup    — naive C ms / micropy ms  (higher = better)")
-print("  flags      — both C variants compiled with -O2 -march=native")
+print("  python ms  -- scaled from smaller problem size to match C workload")
+print("  speedup    -- naive C ms / micropy ms  (higher = better)")
+print("  flags      -- both C variants compiled with -O2 -march=native")

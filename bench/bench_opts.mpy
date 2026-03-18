@@ -10,6 +10,7 @@ Demonstrates four automatic micropy optimizations vs plain C:
   3. alloca substitution — local alloc(≤4KB) replaced with stack allocation
   4. @soa layout         — Struct-of-Arrays for sequential field access
 """
+from __future__ import annotations
 from micropy import *
 
 # ---------------------------------------------------------------------------

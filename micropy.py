@@ -14,6 +14,7 @@ types and functions. The compiler silently skips `import micropy` and
 from typing import Any, Callable, TypeVar, Generic
 
 _T = TypeVar("_T")
+_U = TypeVar("_U")
 
 # ---------------------------------------------------------------------------
 # Primitive type aliases  (used in annotations, e.g. x: ptr[int])
@@ -26,15 +27,15 @@ u8  = u16  = u32  = u64  = int
 f32 = f64  = float
 
 class ptr(Generic[_T]):    ...
-class array(Generic[_T]):  ...  # array[T, N]
-class vec(Generic[_T]):    ...  # vec[T, N]
-class func(Generic[_T]):   ...  # func[Ret, Arg1, ...]
+class array(Generic[_T, _U]):  ...  # array[T, N]
+class vec(Generic[_T, _U]):    ...  # vec[T, N]
+class func(Generic[_T, _U]):   ...  # func[Ret, Arg1, ...]
 class const(Generic[_T]):  ...
 class volatile(Generic[_T]): ...
 class atomic(Generic[_T]):   ...  # atomic[T] — thread-safe field; use atomic_load/store/add
 class static(Generic[_T]): ...
 class thread_local(Generic[_T]): ...
-class bitfield(Generic[_T]): ...  # bitfield[T, N]
+class bitfield(Generic[_T, _U]): ...  # bitfield[T, N]
 class Result(Generic[_T]): ...
 class typed_list(Generic[_T]): ...
 

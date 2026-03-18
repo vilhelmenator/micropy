@@ -987,7 +987,7 @@ class Compiler(StmtMixin, ExprMixin):
         if not module_name:
             module_name = os.path.splitext(os.path.basename(filepath))[0]
 
-        self._current_file = filepath
+        self._current_file = filepath.replace("\\", "/")
         self._current_line = 0
         self.source_dir = os.path.dirname(os.path.abspath(filepath))
         self.current_module = module_name
@@ -2050,6 +2050,7 @@ class Compiler(StmtMixin, ExprMixin):
 
     # Python stdlib modules we silently skip (they map to C via math.h, stdio.h, etc.)
     _STDLIB_SKIP = frozenset({
+        "__future__",  # Python future imports; no-op for compiled code
         "math", "sys", "os", "os.path", "time", "random", "re",
         "json", "collections", "itertools", "functools", "typing",
         "io", "pathlib", "struct", "array", "ctypes",
