@@ -14,6 +14,7 @@ test_*
 # Benchmark artifacts
 bench/bench
 bench/*.c
+!bench/bench_opts_naive.c
 bench/*.h
 bench/*.dSYM/
 
