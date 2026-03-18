@@ -110,6 +110,8 @@ class Compiler(StmtMixin, ExprMixin):
     func_param_order: dict = field(default_factory=dict) # fname → [param_name, ...] in declared order
     func_param_types: dict = field(default_factory=dict)  # fname → [ctype, ...] for all params (incl. self)
     struct_array_fields: dict = field(default_factory=dict)  # (struct_name, field_name) → elem_ctype
+    soa_structs: set  = field(default_factory=set)           # struct names annotated @soa
+    _soa_vars: dict   = field(default_factory=dict)          # varname → (struct_name, size_str, [(fname,ftype)])
     funcptr_alias_infos: dict = field(default_factory=dict)  # alias_name → (ret_ctype, [arg_ctypes])
     type_aliases: dict = field(default_factory=dict)     # alias_name → resolved ctype
     result_types: dict = field(default_factory=dict)     # "Result_T" → inner_ctype
@@ -1163,6 +1165,11 @@ class Compiler(StmtMixin, ExprMixin):
                                 self.struct_array_fields[(node.name, item.target.id)] = _et
                     mod_info.structs[node.name] = fields
                     self.structs[node.name] = fields
+                    # Track @soa-annotated structs
+                    _soa_decs = [d.id if isinstance(d, ast.Name) else None
+                                 for d in node.decorator_list]
+                    if "soa" in _soa_decs:
+                        self.soa_structs.add(node.name)
 
                     # Register class methods as ClassName_methodname
                     for item in node.body:
@@ -2099,7 +2106,7 @@ class Compiler(StmtMixin, ExprMixin):
                 if info:
                     r, fp_args = info
                     fp_arg_str = ", ".join(fp_args) if fp_args else "void"
-                    args.append(f"{r} (*{arg.arg})({fp_arg_str})")
+                    args.append((arg.arg, f"{r} (*{arg.arg})({fp_arg_str})"))
                     continue
             const_prefix = ""
             if (atype.endswith("*")
@@ -2108,10 +2115,28 @@ class Compiler(StmtMixin, ExprMixin):
                     and arg.arg != "self"
                     and not _ptr_is_written(node.body, arg.arg, self.func_param_types)):
                 const_prefix = "const "
-            args.append(f"{const_prefix}{atype} {arg.arg}")
-        arg_str = ", ".join(args) if args else "void"
+            args.append((arg.arg, f"{const_prefix}{atype} {arg.arg}"))
+        # Restrict inference: same logic as compile_function so prototype matches definition.
+        _all_ptr_params = {
+            a.arg for a in node.args.args
+            if map_type(a.annotation).endswith("*")
+            and map_type(a.annotation) not in ("void*", "const void*")
+            and a.arg != "self"
+        }
+        _restrict_params: set = set()
+        if len(_all_ptr_params) >= 2:
+            from codegen_stmts import _aliasing_ptr_params as _app
+            _aliased = _app(node.body, _all_ptr_params)
+            _restrict_params = _all_ptr_params - _aliased
+        final_args = []
+        for _aname, _adecl in args:
+            if _aname in _restrict_params:
+                # Insert "restrict" before the parameter name
+                _adecl = _adecl[: _adecl.rfind(_aname)] + "restrict " + _aname
+            final_args.append(_adecl)
+        arg_str = ", ".join(final_args) if final_args else "void"
         if node.args.vararg is not None:
-            arg_str = (arg_str + ", ..." if args else "...")
+            arg_str = (arg_str + ", ..." if final_args else "...")
         prefix = f"{module_name}_" if module_name != "__main__" else ""
         fname = node.name
         decs = self.get_decorators(node)

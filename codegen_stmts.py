@@ -122,6 +122,39 @@ def _ptr_is_written(body, param_name: str, func_param_types: dict = None) -> boo
     return False
 
 
+def _aliasing_ptr_params(body, ptr_param_names: set) -> set:
+    """Return the subset of ptr_param_names that may alias another ptr param.
+
+    A param is marked aliasing if it is ever directly assigned from another
+    ptr param (or if another ptr param is assigned from it) anywhere in the
+    function body.  Conservative: any Name node from ptr_param_names appearing
+    in the RHS of an assignment whose LHS is also in ptr_param_names taints
+    both the source and the destination.
+    """
+    aliased: set = set()
+    for stmt in body:
+        for node in ast.walk(stmt):
+            lhs_name: str = ""
+            rhs_node = None
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id in ptr_param_names:
+                        lhs_name = target.id
+                        rhs_node = node.value
+            elif isinstance(node, ast.AnnAssign) and node.value:
+                if isinstance(node.target, ast.Name) and node.target.id in ptr_param_names:
+                    lhs_name = node.target.id
+                    rhs_node = node.value
+            if lhs_name and rhs_node is not None:
+                for rhs in ast.walk(rhs_node):
+                    if (isinstance(rhs, ast.Name)
+                            and rhs.id in ptr_param_names
+                            and rhs.id != lhs_name):
+                        aliased.add(lhs_name)
+                        aliased.add(rhs.id)
+    return aliased
+
+
 class StmtMixin:
     # -------------------------------------------------------------------
     # Enum detection
@@ -384,6 +417,18 @@ class StmtMixin:
         self._list_vars = {}
         self._vec_vars = {}
 
+        # Restrict inference: collect ptr params (≥2 required), then check aliasing.
+        _all_ptr_params = {
+            a.arg for a in node.args.args
+            if map_type(a.annotation).endswith("*")
+            and map_type(a.annotation) not in ("void*", "const void*")
+            and a.arg != "self"
+        }
+        _restrict_params: set = set()
+        if len(_all_ptr_params) >= 2:
+            _aliased = _aliasing_ptr_params(node.body, _all_ptr_params)
+            _restrict_params = _all_ptr_params - _aliased
+
         for arg in node.args.args:
             atype = map_type(arg.annotation)
             if atype == "__funcptr__":
@@ -408,7 +453,8 @@ class StmtMixin:
                     and arg.arg != "self"
                     and not _ptr_is_written(node.body, arg.arg, self.func_param_types)):
                 const_prefix = "const "
-            args.append(f"{const_prefix}{atype} {arg.arg}")
+            restrict_kw = " restrict" if arg.arg in _restrict_params else ""
+            args.append(f"{const_prefix}{atype}{restrict_kw} {arg.arg}")
             self.func_args[arg.arg] = atype  # store without const for type inference
 
         arg_str = ", ".join(args) if args else "void"
@@ -598,6 +644,24 @@ class StmtMixin:
                         _last = _i
                         break
             _cands[_vn] = (_di, _last)
+        # Build last-use map for ALL locals so we can detect scope-escape.
+        # A variable declared inside a proposed scope that is used outside it
+        # would go out of scope too early — that wrapping must be suppressed.
+        _all_local_decls = {}  # varname → decl_idx (all AnnAssign, not just structs)
+        for _i, _stmt in enumerate(node.body):
+            if isinstance(_stmt, ast.AnnAssign) and isinstance(_stmt.target, ast.Name):
+                _all_local_decls[_stmt.target.id] = _i
+        _all_last_use = {}
+        for _ovn, _odi in _all_local_decls.items():
+            _olast = _odi
+            for _i, _stmt in enumerate(node.body):
+                if _i < _odi:
+                    continue
+                for _nd in ast.walk(_stmt):
+                    if isinstance(_nd, ast.Name) and _nd.id == _ovn:
+                        _olast = _i
+                        break
+            _all_last_use[_ovn] = _olast
         # Exclude any candidate that partially overlaps another candidate
         _excl = set()
         _clist = list(_cands.items())
@@ -611,6 +675,18 @@ class StmtMixin:
                 if _overlaps and not _a_contains_b and not _b_contains_a:
                     _excl.add(_vna)
                     _excl.add(_vnb)
+        # Exclude any candidate whose scope would trap another local variable:
+        # if local X is declared inside [_di, _last] but used after _last,
+        # closing the scope at _last would make X inaccessible.
+        for _vn, (_di, _last) in _cands.items():
+            if _vn in _excl:
+                continue
+            for _ovn, _odi in _all_local_decls.items():
+                if _ovn == _vn:
+                    continue
+                if _di <= _odi <= _last and _all_last_use.get(_ovn, _odi) > _last:
+                    _excl.add(_vn)
+                    break
         _scope_open  = {}  # stmt_idx → [varname]  — emit "{" before this stmt
         _scope_close = {}  # stmt_idx → [varname]  — emit "}" after this stmt
         for _vn, (_di, _last) in _cands.items():
@@ -774,6 +850,14 @@ class StmtMixin:
 
         if ctype == "__array__":
             elem_type, size = get_array_info(annotation)
+            # @soa expansion: array[SoAStruct, N] → one flat array per field
+            if elem_type in self.soa_structs:
+                _soa_fields = [(fn, ft) for fn, ft in self.structs.get(elem_type, [])
+                               if ft and ft not in ("__array__", "__funcptr__", "__vec__")]
+                for _fn, _ft in _soa_fields:
+                    self.emit(f"{_ft} {name}_{_fn}[{size}];")
+                self._soa_vars[name] = (elem_type, str(size), _soa_fields)
+                return
             self._array_vars[name] = (elem_type, str(size))
             if node.value:
                 # Check if this is a compile_time call (already emitted by _emit_compile_time)
@@ -1009,6 +1093,15 @@ class StmtMixin:
         val_node = node.value
         for target in node.targets:
             if isinstance(target, ast.Subscript):
+                # @soa: whole-element write is not supported
+                if (isinstance(target.value, ast.Name)
+                        and target.value.id in self._soa_vars):
+                    import sys
+                    _arr = target.value.id
+                    print(f"{self._current_file or '?'}:{getattr(node, 'lineno', '?')}: error: "
+                          f"cannot assign whole element to @soa array '{_arr}' "
+                          f"— use '{_arr}[i].field = val'", file=sys.stderr)
+                    continue
                 # Generated typed list: XList_set, no boxing
                 if isinstance(target.value, ast.Name):
                     _et = self._list_vars.get(target.value.id)

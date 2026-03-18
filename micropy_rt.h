@@ -9,6 +9,7 @@
 #include <ctype.h>
 #include <stdarg.h>
 #include <time.h>
+#include <math.h>
 
 struct MpList {
     MpVal* data;

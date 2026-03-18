@@ -200,22 +200,11 @@ Items marked ✅ are already implemented.
   / `__builtin_ia32_movntdq`. Bypasses cache entirely, avoids evicting hot data.
   Requires recognizing the write-only streaming pattern.
 
-- [ ] **Loop-invariant hoist hints**
-  Hoist method calls on structs that don't change within the loop into locals before
-  the loop. Requires alias analysis: confirming no pointer write in the body can
-  reach the struct. More conservative analysis needed than a simple scan.
-
-- [ ] **Explicit NRVO (return-value placement)**
-  Detect allocate-fill-return-pointer pattern. Rewrite callee to accept an output
-  pointer; rewrite call sites to pass a stack slot. Eliminates the heap allocation
-  entirely. Cross-function transformation — only item here that mutates function
-  signatures and requires coordinated changes across modules.
-
 - [x] **Struct field sparsity warning**
   At struct definition time, compute the natural layout and warn if field ordering
   would leave gaps larger than a cache line. Suggest a reordered layout.
 
-- [ ] **`@soa` Array-of-Structs → Struct-of-Arrays transformation**
+- [x] **`@soa` Array-of-Structs → Struct-of-Arrays transformation**
   Explicit `@soa` annotation on a struct class. When an `array[T, N]` is declared
   where `T` is `@soa`-annotated, the compiler expands it into one parallel array per
   field instead of a single struct array. All `arr[i].field` accesses rewrite to
@@ -261,3 +250,45 @@ Items marked ✅ are already implemented.
   - Auto gather/scatter for whole-element access
   - SoA-aware method rewriting (method takes field pointers instead of struct pointer)
   - Nested SoA structs
+
+  ### One-pass AST walks — trivial to add
+
+- [x] **`restrict` on non-aliasing pointer parameters**
+  If a function takes two or more `ptr[T]` parameters and neither is ever assigned
+  from the other or from a common source within the function body, emit `restrict`
+  on each. Single AST walk per function — check for aliasing assignments between
+  pointer parameters. This is the single highest-value qualifier for loop
+  vectorization, and C programmers almost never write it because proving non-aliasing
+  manually is tedious. The C compiler cannot insert `restrict` — it's a promise only
+  the source author can make.
+
+- [ ] **Branch-free select for side-effect-free ternaries**
+  `x = a if cond else b` where both `a` and `b` are pure expressions (literals,
+  locals, arithmetic — no calls, no pointer derefs with possible side effects) →
+  emit as a C ternary `x = cond ? a : b` with a compiler hint, or as
+  `x = cond * a + (!cond) * b` for integer types. The C compiler sometimes converts
+  `if/else` to `cmov`, but bails when it can't prove both arms are side-effect-free.
+  MicroPy knows this from the AST — the purity check is a leaf-node type test.
+
+- [ ] **Loop trip-count hints for known bounds**
+  When `for i in range(N)` has N known at compile time or traceable to a constant
+  call-site argument, emit `#pragma GCC unroll N` (for small N) or
+  `__builtin_expect(n, N)` on the loop bound. The C compiler must analyze this
+  conservatively; MicroPy can just tell it.
+
+### Requires call-graph or cross-function view
+
+- [ ] **Hot call-site constant specialization**
+  If a function is called from a hot loop with a constant argument (e.g. a stride,
+  a flag, a dimension), emit a specialized copy with that constant folded in. Only
+  for small functions (≤ 20 AST nodes) at call sites inside `@hot` functions or
+  `@unroll` loops. The constant enables the C compiler to vectorize and strength-
+  reduce in ways it can't with a variable. MicroPy sees both the call site and the
+  callee body — LTO sometimes does this, but only for trivial inlining candidates.
+
+- [ ] **Intra-function hot/cold splitting**
+  When an `if` branch contains only error handling, logging, or calls to `@cold`
+  functions, extract it into a separate `static __attribute__((cold))` helper and
+  replace the branch with a call. Keeps the hot path's instruction footprint tight
+  for I-cache. Extension of the existing `@cold` inference — same detection logic,
+  but emits an extracted function instead of just an annotation.

@@ -151,6 +151,14 @@ class ExprMixin:
             return self.compile_call(node)
 
         if isinstance(node, ast.Subscript):
+            # @soa: standalone whole-element subscript on SoA array is unsupported
+            if (isinstance(node.value, ast.Name)
+                    and node.value.id in self._soa_vars):
+                import sys
+                _arr = node.value.id
+                print(f"{self._current_file or '?'}: error: cannot access whole element of "
+                      f"@soa array '{_arr}' — use '{_arr}[i].field'", file=sys.stderr)
+                return f"0 /* @soa error */"
             if isinstance(node.value, ast.Name):
                 vname = node.value.id
                 et = self._list_vars.get(vname)
@@ -177,6 +185,23 @@ class ExprMixin:
             return f"{val}[{sl}]"
 
         if isinstance(node, ast.Attribute):
+            # @soa field access: arr[i].field → arr_field[i]
+            # Must be checked before compile_expr(node.value) to avoid the
+            # whole-element subscript error firing on arr[i].
+            if (isinstance(node.value, ast.Subscript)
+                    and isinstance(node.value.value, ast.Name)
+                    and node.value.value.id in self._soa_vars):
+                _arr = node.value.value.id
+                _struct_name, _size, _soa_fields = self._soa_vars[_arr]
+                _field_names = {fn for fn, _ in _soa_fields}
+                if node.attr not in _field_names:
+                    import sys
+                    print(f"{self._current_file or '?'}: error: '{node.attr}' is not a "
+                          f"scalar field of @soa struct '{_struct_name}' (method calls and "
+                          f"nested array fields on @soa elements are not supported)",
+                          file=sys.stderr)
+                _idx = self.compile_expr(node.value.slice)
+                return f"{_arr}_{node.attr}[{_idx}]"
             val = self.compile_expr(node.value)
             attr = node.attr
             if isinstance(node.value, ast.Name) and node.value.id in self.enums:
