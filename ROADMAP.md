@@ -71,11 +71,11 @@ The correctness pass costs nothing at runtime; all of it is compile-time analysi
       free(buf)
   ```
 
-- [ ] **Double-free detection**
+- [x] **Double-free detection**
   Track the *freed* state of each local pointer. `free(p)` on an already-freed
   variable on any code path → compile-time error.
 
-- [ ] **Use-after-free detection**
+- [x] **Use-after-free detection**
   Same state tracking. Any read or write through `p` after `free(p)` on any code
   path → compile-time warning.
 

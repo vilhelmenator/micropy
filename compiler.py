@@ -324,15 +324,27 @@ class Compiler(StmtMixin, ExprMixin):
                             self._check_leaks_func(item, filepath)
 
     def _check_leaks_func(self, func_node: ast.FunctionDef, filepath: str) -> None:
-        """Path-sensitive leak analysis for one function. Warns to stderr."""
+        """Path-sensitive leak/double-free/use-after-free analysis for one function."""
         # Skip vars the compiler already auto-frees or that legitimately escape
         classify = self._escape_classify(func_node)
         skip_vars = {v for v, st in classify.items() if st in ("local_only", "escaping")}
 
-        def warn(lineno: int, var: str, alloc_line: int) -> None:
+        def warn_leak(lineno: int, var: str, alloc_line: int) -> None:
             print(
                 f"{filepath}:{lineno}: warning: '{var}' allocated at line {alloc_line}"
                 f" may not be freed on this path",
+                file=sys.stderr,
+            )
+
+        def error_double_free(lineno: int, var: str, free_line: int) -> None:
+            print(
+                f"{filepath}:{lineno}: error: '{var}' already freed at line {free_line}",
+                file=sys.stderr,
+            )
+
+        def warn_uaf(lineno: int, var: str, free_line: int) -> None:
+            print(
+                f"{filepath}:{lineno}: warning: '{var}' used after free at line {free_line}",
                 file=sys.stderr,
             )
 
@@ -345,29 +357,60 @@ class Compiler(StmtMixin, ExprMixin):
             return (fname in _ALLOC_FUNCS
                     or "producer" in self.func_alloc_tags.get(fname, frozenset()))
 
-        def discharge(call_node, live: dict) -> None:
-            """Remove ownership of args passed to free() / Consumer / Stores."""
+        def check_expr_for_uaf(expr, freed: dict, lineno: int) -> None:
+            """Warn if any freed variable appears in an expression."""
+            for node in ast.walk(expr):
+                if isinstance(node, ast.Name) and node.id in freed:
+                    warn_uaf(lineno, node.id, freed[node.id])
+
+        def discharge(call_node, live: dict, freed: dict) -> None:
+            """Discharge ownership at a call site; detect double-free and UAF."""
+            lineno = getattr(call_node, "lineno", 0)
             if not isinstance(call_node.func, ast.Name):
+                # Method call — still check args for UAF
+                for arg in call_node.args:
+                    if isinstance(arg, ast.Name) and arg.id in freed:
+                        warn_uaf(lineno, arg.id, freed[arg.id])
                 return
             fname = call_node.func.id
             tags = self.func_alloc_tags.get(fname, frozenset())
-            if fname in _FREE_FUNCS or "consumer" in tags or "stores" in tags:
+            if fname in _FREE_FUNCS:
                 for arg in call_node.args:
                     if isinstance(arg, ast.Name):
-                        live.pop(arg.id, None)
+                        var = arg.id
+                        if var in freed:
+                            error_double_free(lineno, var, freed[var])
+                        else:
+                            live.pop(var, None)
+                            freed[var] = lineno
+            elif "consumer" in tags or "stores" in tags:
+                for arg in call_node.args:
+                    if isinstance(arg, ast.Name):
+                        var = arg.id
+                        if var in freed:
+                            warn_uaf(lineno, var, freed[var])
+                        else:
+                            live.pop(var, None)
+            else:
+                # Regular borrows / unknown call — check args for UAF
+                for arg in call_node.args:
+                    if isinstance(arg, ast.Name) and arg.id in freed:
+                        warn_uaf(lineno, arg.id, freed[arg.id])
 
-        def analyze_body(stmts, live: dict):
-            """Process a statement list. Returns updated live dict, or None if
-            every path through these statements exits (return/raise)."""
+        def analyze_body(stmts, live: dict, freed: dict):
+            """Process a statement list. Returns (live, freed), or None if every
+            path through these statements exits (return/raise)."""
             live = dict(live)
+            freed = dict(freed)
             for stmt in stmts:
-                live = analyze_stmt(stmt, live)
-                if live is None:
+                result = analyze_stmt(stmt, live, freed)
+                if result is None:
                     return None
-            return live
+                live, freed = result
+            return live, freed
 
-        def analyze_stmt(stmt, live: dict):
-            """Returns updated live dict, or None if this statement always exits."""
+        def analyze_stmt(stmt, live: dict, freed: dict):
+            """Returns (live, freed), or None if this statement always exits."""
             lineno = getattr(stmt, "lineno", 0)
 
             # x: ptr[T] = alloc(...) or x: ptr[T] = producer()
@@ -375,79 +418,93 @@ class Compiler(StmtMixin, ExprMixin):
                 name = stmt.target.id
                 if stmt.value:
                     if isinstance(stmt.value, ast.Call):
-                        discharge(stmt.value, live)
+                        discharge(stmt.value, live, freed)
+                    else:
+                        check_expr_for_uaf(stmt.value, freed, lineno)
                     if name not in skip_vars and is_owned_rhs(stmt.value):
                         live[name] = lineno
-                return live
+                return live, freed
 
             # x = alloc(...) or x = producer()
             if isinstance(stmt, ast.Assign):
                 if isinstance(stmt.value, ast.Call):
-                    discharge(stmt.value, live)
+                    discharge(stmt.value, live, freed)
+                else:
+                    check_expr_for_uaf(stmt.value, freed, lineno)
                 for t in stmt.targets:
                     if isinstance(t, ast.Name) and t.id not in skip_vars:
                         if is_owned_rhs(stmt.value):
                             live[t.id] = lineno
-                return live
+                return live, freed
 
             # Bare call expression: free(x), consume(x)
             if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
-                discharge(stmt.value, live)
-                return live
+                discharge(stmt.value, live, freed)
+                return live, freed
 
             # return — warn about live vars that aren't the returned value
             if isinstance(stmt, ast.Return):
                 returned = (stmt.value.id
                             if stmt.value and isinstance(stmt.value, ast.Name)
                             else None)
+                if stmt.value:
+                    check_expr_for_uaf(stmt.value, freed, lineno)
                 for var, alloc_line in live.items():
                     if var != returned:
-                        warn(lineno, var, alloc_line)
+                        warn_leak(lineno, var, alloc_line)
                 return None  # path exits
 
             # raise — warn about all live vars
             if isinstance(stmt, ast.Raise):
                 for var, alloc_line in live.items():
-                    warn(lineno, var, alloc_line)
+                    warn_leak(lineno, var, alloc_line)
                 return None  # path exits
 
-            # if / else — fork, recurse, merge surviving live sets
+            # if / else — fork, recurse, merge surviving sets
             if isinstance(stmt, ast.If):
+                check_expr_for_uaf(stmt.test, freed, lineno)
                 for n in ast.walk(stmt.test):
                     if isinstance(n, ast.Call):
-                        discharge(n, live)
-                live_then = analyze_body(stmt.body, live)
-                live_else = (analyze_body(stmt.orelse, live)
-                             if stmt.orelse else dict(live))
-                if live_then is None and live_else is None:
+                        discharge(n, live, freed)
+                result_then = analyze_body(stmt.body, live, freed)
+                result_else = (analyze_body(stmt.orelse, live, freed)
+                               if stmt.orelse else (dict(live), dict(freed)))
+                if result_then is None and result_else is None:
                     return None
-                if live_then is None:
-                    return live_else
-                if live_else is None:
-                    return live_then
-                merged = dict(live_then)
+                if result_then is None:
+                    return result_else
+                if result_else is None:
+                    return result_then
+                live_then, freed_then = result_then
+                live_else, freed_else = result_else
+                merged_live = dict(live_then)
                 for var, loc in live_else.items():
-                    if var not in merged:
-                        merged[var] = loc
-                return merged
+                    if var not in merged_live:
+                        merged_live[var] = loc
+                merged_freed = dict(freed_then)
+                merged_freed.update(freed_else)
+                return merged_live, merged_freed
 
             # while / for — analyze body once (conservative: don't model iterations)
             if isinstance(stmt, (ast.While, ast.For)):
-                analyze_body(stmt.body, dict(live))
-                return live
+                if isinstance(stmt, ast.While):
+                    check_expr_for_uaf(stmt.test, freed, lineno)
+                analyze_body(stmt.body, dict(live), dict(freed))
+                return live, freed
 
             # with — analyze body
             if isinstance(stmt, ast.With):
-                result = analyze_body(stmt.body, live)
-                return live if result is None else result
+                result = analyze_body(stmt.body, live, freed)
+                return (live, freed) if result is None else result
 
-            return live
+            return live, freed
 
-        final = analyze_body(func_node.body, {})
+        final = analyze_body(func_node.body, {}, {})
         if final:
+            live, _freed = final
             end_line = getattr(func_node, "end_lineno", func_node.lineno)
-            for var, alloc_line in final.items():
-                warn(end_line, var, alloc_line)
+            for var, alloc_line in live.items():
+                warn_leak(end_line, var, alloc_line)
 
     # -------------------------------------------------------------------
     # Type inference
