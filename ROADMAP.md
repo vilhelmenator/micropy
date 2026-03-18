@@ -160,7 +160,7 @@ Items marked ✅ are already implemented.
   single `alloca`/`malloc`, carved into named offsets. One allocation, one cache
   line, one free (or none if on the stack).
 
-- [ ] **Arena allocation batching**
+- [x] **Arena allocation batching**
   Multiple `arena_list_new` / `arena_alloc` calls from the same arena in the same
   block → coalesce into a single bump. One pointer advance, zero per-item overhead.
   Sizes are compile-time constants.

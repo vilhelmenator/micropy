@@ -414,6 +414,68 @@ class StmtMixin:
         else:
             self._merged_alloc_offsets = {}
             self._merged_buf_name = ""
+        # Arena allocation batching: group same-arena top-level calls into one bump.
+        # arena_alloc(a, N) × ≥2 same-arena → single mp_arena_alloc + offset slices.
+        # arena_list_new(a) × ≥2 same-arena → single bump + inline MpList init.
+        _arena_alloc_groups = {}   # arena_name → [(varname, ctype, size_int)]
+        _arena_list_groups  = {}   # arena_name → [varname]
+        for _stmt in node.body:
+            if (isinstance(_stmt, ast.AnnAssign)
+                    and isinstance(_stmt.target, ast.Name)
+                    and _stmt.value
+                    and isinstance(_stmt.value, ast.Call)
+                    and isinstance(_stmt.value.func, ast.Name)):
+                _fn   = _stmt.value.func.id
+                _vn   = _stmt.target.id
+                _vct  = map_type(_stmt.annotation)
+                if (_fn == "arena_alloc"
+                        and len(_stmt.value.args) == 2
+                        and isinstance(_stmt.value.args[0], ast.Name)
+                        and isinstance(_stmt.value.args[1], ast.Constant)
+                        and isinstance(_stmt.value.args[1].value, int)):
+                    _an = _stmt.value.args[0].id
+                    _sz = _stmt.value.args[1].value
+                    _arena_alloc_groups.setdefault(_an, []).append((_vn, _vct, _sz))
+                elif (_fn == "arena_list_new"
+                        and len(_stmt.value.args) == 1
+                        and isinstance(_stmt.value.args[0], ast.Name)):
+                    _an = _stmt.value.args[0].id
+                    _arena_list_groups.setdefault(_an, []).append(_vn)
+        self._arena_batched_vars = {}
+        self._arena_batch_meta   = {}
+        for _an, _entries in _arena_alloc_groups.items():
+            if len(_entries) < 2 or _an in self._arena_batch_meta:
+                continue
+            _bvar  = f"_ab_{_an}"
+            _total = 0
+            _offs  = {}
+            for _vn, _vct, _vsz in _entries:
+                _total = (_total + 7) & ~7
+                _offs[_vn] = _total
+                _total += _vsz
+            _total = (_total + 7) & ~7
+            self._arena_batch_meta[_an] = {
+                "kind": "alloc", "base_var": _bvar,
+                "total": _total, "emitted": False,
+            }
+            for _vn, _vct, _vsz in _entries:
+                self._arena_batched_vars[_vn] = {
+                    "kind": "alloc", "arena": _an,
+                    "ctype": _vct, "offset": _offs[_vn],
+                }
+        for _an, _names in _arena_list_groups.items():
+            if len(_names) < 2 or _an in self._arena_batch_meta:
+                continue
+            _bvar  = f"_ab_{_an}"
+            _svar  = f"_aslot_{_an}"
+            self._arena_batch_meta[_an] = {
+                "kind": "list_new", "base_var": _bvar, "slot_var": _svar,
+                "count": len(_names), "emitted": False,
+            }
+            for _i, _vn in enumerate(_names):
+                self._arena_batched_vars[_vn] = {
+                    "kind": "list_new", "arena": _an, "index": _i,
+                }
         # Prewarm @compile_time static arrays referenced in this function body
         if self._compile_time_arrays:
             _prewarmed = set()
@@ -446,6 +508,8 @@ class StmtMixin:
         self._str_literal_vars = set()
         self._merged_alloc_offsets = {}
         self._merged_buf_name = ""
+        self._arena_batched_vars = {}
+        self._arena_batch_meta = {}
         self._in_simd_func = False
 
     # -------------------------------------------------------------------
@@ -628,6 +692,35 @@ class StmtMixin:
                 self.emit(f'MpStr _lit_{name} = {{.data=(char*)"{escaped}",.len={len(s)}}};')
                 self.emit(f"MpStr* {name} = &_lit_{name};")
                 self._str_literal_vars.add(name)
+                return
+            # Arena allocation batching — coalesce same-arena bump allocs
+            if (name in self._arena_batched_vars
+                    and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Name)
+                    and node.value.func.id in ("arena_alloc", "arena_list_new")):
+                _bi   = self._arena_batched_vars[name]
+                _an   = _bi["arena"]
+                _meta = self._arena_batch_meta[_an]
+                if not _meta["emitted"]:
+                    _meta["emitted"] = True
+                    _bv = _meta["base_var"]
+                    if _meta["kind"] == "alloc":
+                        self.emit(f"char* {_bv} = (char*)mp_arena_alloc({_an}, {_meta['total']});")
+                    else:
+                        _sv = _meta["slot_var"]
+                        self.emit(f"const int64_t {_sv} = (int64_t)"
+                                  f"(((sizeof(MpList)+7)&~7) + ((sizeof(MpVal)*8+7)&~7));")
+                        self.emit(f"char* {_bv} = (char*)mp_arena_alloc({_an}, {_meta['count']} * {_sv});")
+                _bv = _meta["base_var"]
+                if _bi["kind"] == "alloc":
+                    self.emit(f"{_bi['ctype']} {name} = ({_bi['ctype']})({_bv} + {_bi['offset']});")
+                else:
+                    _i  = _bi["index"]
+                    _sv = _meta["slot_var"]
+                    self.emit(f"MpList* {name} = (MpList*)({_bv} + {_i} * {_sv});")
+                    self.emit(f"{name}->cap = 8; {name}->len = 0;")
+                    self.emit(f"{name}->data = (MpVal*)({_bv} + {_i} * {_sv}"
+                              f" + (int64_t)((sizeof(MpList)+7)&~7));")
                 return
             # Escape-analysis alloc optimizations (local-only pointer, no escape)
             if (name in self._auto_free_vars

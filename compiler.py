@@ -121,6 +121,8 @@ class Compiler(StmtMixin, ExprMixin):
     func_alloc_tags: dict = field(default_factory=dict)  # fname → frozenset of "producer"|"consumer"|"borrows"|"stores"
     _auto_free_vars: set = field(default_factory=set)    # locals auto-deferred for free() in current function
     _str_literal_vars: set = field(default_factory=set)  # locals init'd from string literal (stack MpStr, no malloc)
+    _arena_batched_vars: dict = field(default_factory=dict)  # varname → arena batch info for current function
+    _arena_batch_meta: dict = field(default_factory=dict)    # arena_name → batch metadata for current function
     debug_mode: bool = False                             # emit allocation tracking (--debug)
 
     def emit(self, line=""):
