@@ -13,6 +13,10 @@ from codegen_exprs import ExprMixin
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
+# Allocation primitives recognised by the escape / ownership analysis
+_ALLOC_FUNCS = frozenset({"alloc", "alloc_safe", "mp_alloc"})
+_FREE_FUNCS  = frozenset({"free",  "mp_free"})
+
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -87,6 +91,7 @@ class Compiler(StmtMixin, ExprMixin):
     _lambda_counter: int = 0
     emit_line_directives: bool = True  # set False with --no-line-directives
     _lambda_table: dict = field(default_factory=dict)  # id(ast.Lambda) → name
+    func_alloc_tags: dict = field(default_factory=dict)  # fname → frozenset of "producer"|"consumer"|"borrows"|"stores"
 
     def emit(self, line=""):
         prefix = "    " * self.indent
@@ -135,6 +140,151 @@ class Compiler(StmtMixin, ExprMixin):
         if isinstance(node, ast.List):
             return [self._extract_const(e) for e in node.elts]
         return str(ast.dump(node))
+
+    # -------------------------------------------------------------------
+    # Escape analysis + allocation signature tagging
+    # -------------------------------------------------------------------
+
+    def _escape_classify(self, func_node: ast.FunctionDef) -> dict:
+        """Return {var_name: True/False} for every local variable assigned
+        directly from an alloc() call.  True = escapes, False = local-only.
+
+        A variable is considered escaping if it is:
+          - returned from the function
+          - passed as an argument to any function call
+          - assigned into a struct field (x.field = var)
+        """
+        alloc_vars: dict = {}
+        for node in ast.walk(func_node):
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                if (node.value and isinstance(node.value, ast.Call)
+                        and isinstance(node.value.func, ast.Name)
+                        and node.value.func.id in _ALLOC_FUNCS):
+                    alloc_vars[node.target.id] = False
+            elif isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        if (isinstance(node.value, ast.Call)
+                                and isinstance(node.value.func, ast.Name)
+                                and node.value.func.id in _ALLOC_FUNCS):
+                            alloc_vars[t.id] = False
+
+        if not alloc_vars:
+            return {}
+
+        for node in ast.walk(func_node):
+            if isinstance(node, ast.Return) and node.value:
+                if isinstance(node.value, ast.Name) and node.value.id in alloc_vars:
+                    alloc_vars[node.value.id] = True
+            elif isinstance(node, ast.Call):
+                for arg in node.args:
+                    if isinstance(arg, ast.Name) and arg.id in alloc_vars:
+                        alloc_vars[arg.id] = True
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Attribute):
+                        if isinstance(node.value, ast.Name) and node.value.id in alloc_vars:
+                            alloc_vars[node.value.id] = True
+
+        return alloc_vars  # {var: True=escaping, False=local-only}
+
+    def _build_alloc_tags(self, tree) -> None:
+        """Populate self.func_alloc_tags[fname] = frozenset of allocation roles.
+
+        Tags:
+          "producer" — returns a pointer that came from alloc()
+          "consumer" — frees a pointer parameter via free()
+          "stores"   — writes a pointer parameter into a struct field or global
+          "borrows"  — takes pointer params but neither frees nor stores them
+
+        Handles top-level functions and struct methods (tagged as ClassName_method).
+        For extern/compile_time/trait/generic functions no tags are emitted.
+        """
+        skip_decs = frozenset({"extern", "compile_time", "trait", "generic"})
+
+        def _tag_func(node: ast.FunctionDef, prefix: str = "") -> None:
+            decs = self.get_decorators(node)
+            if any(d in decs for d in skip_decs):
+                return
+
+            # Pointer-typed parameters (excludes self)
+            ptr_params: set = set()
+            for arg in node.args.args:
+                if arg.arg == "self":
+                    continue
+                if arg.annotation:
+                    ctype = map_type(arg.annotation)
+                    if ctype.endswith("*"):
+                        ptr_params.add(arg.arg)
+
+            # alloc'd locals — needed for Producer detection
+            alloc_locals: set = set()
+            for child in ast.walk(node):
+                if isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name):
+                    if (child.value and isinstance(child.value, ast.Call)
+                            and isinstance(child.value.func, ast.Name)
+                            and child.value.func.id in _ALLOC_FUNCS):
+                        alloc_locals.add(child.target.id)
+                elif isinstance(child, ast.Assign):
+                    for t in child.targets:
+                        if isinstance(t, ast.Name):
+                            if (isinstance(child.value, ast.Call)
+                                    and isinstance(child.value.func, ast.Name)
+                                    and child.value.func.id in _ALLOC_FUNCS):
+                                alloc_locals.add(t.id)
+
+            tags: set = set()
+            consumed: set = set()
+            stored: set = set()
+
+            for child in ast.walk(node):
+                # Producer: return alloc(...) or return alloc'd local
+                if isinstance(child, ast.Return) and child.value:
+                    if (isinstance(child.value, ast.Call)
+                            and isinstance(child.value.func, ast.Name)
+                            and child.value.func.id in _ALLOC_FUNCS):
+                        tags.add("producer")
+                    elif isinstance(child.value, ast.Name) and child.value.id in alloc_locals:
+                        tags.add("producer")
+
+                # Consumer: free(param)
+                elif isinstance(child, ast.Call):
+                    if (isinstance(child.func, ast.Name)
+                            and child.func.id in _FREE_FUNCS
+                            and child.args
+                            and isinstance(child.args[0], ast.Name)
+                            and child.args[0].id in ptr_params):
+                        consumed.add(child.args[0].id)
+
+                # Stores: x.field = param
+                elif isinstance(child, ast.Assign):
+                    for target in child.targets:
+                        if isinstance(target, ast.Attribute):
+                            if (isinstance(child.value, ast.Name)
+                                    and child.value.id in ptr_params):
+                                stored.add(child.value.id)
+
+            if consumed:
+                tags.add("consumer")
+            if stored:
+                tags.add("stores")
+            # Borrows: pointer params that are neither consumed nor stored
+            if ptr_params - consumed - stored:
+                tags.add("borrows")
+
+            fname = f"{prefix}{node.name}" if prefix else node.name
+            self.func_alloc_tags[fname] = frozenset(tags)
+
+        # Top-level functions
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, ast.FunctionDef):
+                _tag_func(node)
+            elif isinstance(node, ast.ClassDef):
+                decs = self.get_decorators(node)
+                if "trait" not in decs and not self._is_enum_class(node):
+                    for item in node.body:
+                        if isinstance(item, ast.FunctionDef):
+                            _tag_func(item, prefix=f"{node.name}_")
 
     # -------------------------------------------------------------------
     # Type inference
@@ -672,6 +822,9 @@ class Compiler(StmtMixin, ExprMixin):
         self._scan_typed_lists(tree)
         self._scan_result_types(tree)
         self._scan_tuple_returns(tree)
+
+        # Build allocation signature tags for every function in this module
+        self._build_alloc_tags(tree)
 
         # ---- Process imports ----
         for node in ast.iter_child_nodes(tree):

@@ -35,7 +35,7 @@ def build_once(args, source_dir) -> bool:
     for _hdr in ("micropy_rt.h", "micropy_types.h"):
         _dst = os.path.join(source_dir, _hdr)
         _src = os.path.join(_HERE, _hdr)
-        if not os.path.exists(_dst) or os.path.getmtime(_src) > os.path.getmtime(_dst):
+        if not os.path.exists(_dst) or os.path.getmtime(_src) >= os.path.getmtime(_dst):
             shutil.copy2(_src, _dst)
 
     compiler = Compiler(

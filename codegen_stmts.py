@@ -48,6 +48,8 @@ class StmtMixin:
         struct_attrs = []
         if "packed" in decs:
             struct_attrs.append("packed")
+        if "hot" in decs:
+            struct_attrs.append("aligned(64)")
         if "align" in decs:
             align_info = decs["align"]
             n = align_info["args"][0] if isinstance(align_info, dict) and align_info.get("args") else 64
@@ -719,7 +721,16 @@ class StmtMixin:
                 cond = f"{test_base}___bool__({obj})"
             else:
                 cond = f"{test_base}___bool__(&({obj}))"
-        self.emit(f"if ({cond}) {{")
+        # Guard pattern: if cond: raise/abort — the error branch is cold
+        _is_guard = (
+            not node.orelse
+            and len(node.body) == 1
+            and isinstance(node.body[0], ast.Raise)
+        )
+        if _is_guard:
+            self.emit(f"if (MP_UNLIKELY({cond})) {{")
+        else:
+            self.emit(f"if ({cond}) {{")
         self.indent += 1
         for stmt in node.body:
             self.compile_stmt(stmt)
@@ -946,7 +957,24 @@ class StmtMixin:
                     self.emit(f"/* ERROR: unsupported range() */")
                     return
 
+                # Detect arrays subscripted by the loop variable — emit prefetch
+                _target_id = node.target.id if isinstance(node.target, ast.Name) else None
+                _prefetch_arrs = []
+                if _target_id:
+                    for _stmt in node.body:
+                        for _n in ast.walk(_stmt):
+                            if (isinstance(_n, ast.Subscript)
+                                    and isinstance(_n.slice, ast.Name)
+                                    and _n.slice.id == _target_id
+                                    and isinstance(_n.value, ast.Name)
+                                    and _n.value.id not in _prefetch_arrs):
+                                _prefetch_arrs.append(_n.value.id)
+                _prefetch_arrs = _prefetch_arrs[:2]  # cap at 2 streams
+
                 self.indent += 1
+                if _prefetch_arrs:
+                    for _arr in _prefetch_arrs:
+                        self.emit(f"MP_PREFETCH(&{_arr}[{_target_id} + 8], 0, 1);")
                 for stmt in node.body:
                     self.compile_stmt(stmt)
                 self.indent -= 1
@@ -1003,10 +1031,28 @@ class StmtMixin:
             self.compile_for(node)
             return
 
+        # Detect arrays subscripted by the loop variable — prefetch them ahead
+        _arrays_to_prefetch = []
+        for _stmt in node.body:
+            for _n in ast.walk(_stmt):
+                if (isinstance(_n, ast.Subscript) and
+                        isinstance(_n.slice, ast.Name) and _n.slice.id == target and
+                        isinstance(_n.value, ast.Name) and
+                        _n.value.id not in _arrays_to_prefetch):
+                    _arrays_to_prefetch.append(_n.value.id)
+        # Cap at 2 arrays to avoid evicting useful lines from cache
+        _arrays_to_prefetch = _arrays_to_prefetch[:2]
+        # Distance: 2 cache lines worth of elements (128 bytes / element size).
+        # Default to 16 (covers 128 B for 8-byte types, 64 B for 4-byte types).
+        _prefetch_dist = max(factor * 4, 16)
+
         # Unrolled main loop
         self.emit(f"/* unrolled x{factor} */")
         self.emit(f"for (int64_t {target} = {start}; {target} + {factor - 1} < {stop}; {target} += {factor}) {{")
         self.indent += 1
+        if _arrays_to_prefetch:
+            for _arr in _arrays_to_prefetch:
+                self.emit(f"MP_PREFETCH(&{_arr}[{target} + {_prefetch_dist}], 0, 1);")
         for offset in range(factor):
             self.emit(f"/* iteration +{offset} */")
             self.emit(f"{{")

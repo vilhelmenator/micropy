@@ -423,11 +423,11 @@ class ExprMixin:
 
             if fname == "is_ok" and len(node.args) == 1:
                 expr = self.compile_expr(node.args[0])
-                return f"({expr})._ok"
+                return f"MP_LIKELY(({expr})._ok)"
 
             if fname == "is_err" and len(node.args) == 1:
                 expr = self.compile_expr(node.args[0])
-                return f"(!({expr})._ok)"
+                return f"MP_UNLIKELY(!({expr})._ok)"
 
             if fname == "unwrap" and len(node.args) == 1:
                 t = self.infer_type(node.args[0])

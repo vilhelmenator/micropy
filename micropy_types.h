@@ -16,6 +16,17 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* Branch-prediction hints — portable across GCC, Clang, MSVC */
+#if defined(__GNUC__) || defined(__clang__)
+#  define MP_LIKELY(x)   __builtin_expect(!!(x), 1)
+#  define MP_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#  define MP_PREFETCH(p, rw, loc) __builtin_prefetch((p), (rw), (loc))
+#else
+#  define MP_LIKELY(x)   (x)
+#  define MP_UNLIKELY(x) (x)
+#  define MP_PREFETCH(p, rw, loc) ((void)0)
+#endif
+
 /* Thread-local storage qualifier — portable across GCC, Clang, MSVC */
 #if defined(_MSC_VER)
 #  define MP_TLS __declspec(thread)
