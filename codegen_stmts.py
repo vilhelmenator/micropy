@@ -155,6 +155,19 @@ def _aliasing_ptr_params(body, ptr_param_names: set) -> set:
     return aliased
 
 
+def _is_pure_expr(node) -> bool:
+    """Return True if node contains no function calls, subscripts, or attribute accesses.
+
+    Pure expressions are literals, names, and arithmetic/logical/compare
+    operations on those — safe to evaluate without side effects so we can
+    hoist them into a ternary that the C compiler can convert to cmov.
+    """
+    for n in ast.walk(node):
+        if isinstance(n, (ast.Call, ast.Subscript, ast.Attribute)):
+            return False
+    return True
+
+
 class StmtMixin:
     # -------------------------------------------------------------------
     # Enum detection
@@ -403,10 +416,222 @@ class StmtMixin:
 
         walk_stmts(stmts)
 
+    # -------------------------------------------------------------------
+    # Hot/cold branch splitting
+    # -------------------------------------------------------------------
+
+    def _is_cold_stmts(self, stmts) -> bool:
+        """True if every statement qualifies as cold: raise, @cold call, or nested cold if."""
+        if not stmts:
+            return False
+        for stmt in stmts:
+            if isinstance(stmt, ast.Raise):
+                continue
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+                call = stmt.value
+                name = (call.func.id if isinstance(call.func, ast.Name) else
+                        call.func.attr if isinstance(call.func, ast.Attribute) else None)
+                if name and name in self._cold_funcs:
+                    continue
+            if isinstance(stmt, ast.If):
+                if (self._is_cold_stmts(stmt.body)
+                        and (not stmt.orelse or self._is_cold_stmts(stmt.orelse))):
+                    continue
+            return False
+        return True
+
+    def _cold_free_vars(self, stmts, local_types: dict) -> list:
+        """Collect all Name references in stmts that are known locals or parameters."""
+        found = set()
+        for stmt in stmts:
+            for n in ast.walk(stmt):
+                if isinstance(n, ast.Name) and n.id in local_types:
+                    found.add(n.id)
+        return sorted(found)
+
+    def _cold_all_raise(self, stmts) -> bool:
+        """True if every exit path of stmts ends in a raise (helper is noreturn)."""
+        if not stmts:
+            return False
+        last = stmts[-1]
+        if isinstance(last, ast.Raise):
+            return True
+        if isinstance(last, ast.If):
+            return (self._cold_all_raise(last.body)
+                    and self._cold_all_raise(last.orelse or []))
+        return False
+
+    def _scan_and_emit_cold_branches(self, node: ast.FunctionDef, module_name: str):
+        """Pre-scan function body; extract cold if-arms into static __attribute__((cold)) helpers."""
+        self._cold_splits = {}
+        if not hasattr(self, '_cold_helper_counter'):
+            self._cold_helper_counter = 0
+
+        # Build local type map: parameters + top-level AnnAssign declarations
+        local_types: dict = {}
+        for arg in node.args.args:
+            ctype = map_type(arg.annotation)
+            if ctype not in ("__funcptr__", "__array__", "__vec__"):
+                local_types[arg.arg] = ctype
+        for stmt in node.body:
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                ctype = map_type(stmt.annotation)
+                if ctype not in ("__funcptr__", "__array__", "__vec__"):
+                    local_types[stmt.target.id] = ctype
+
+        prefix = f"{module_name}_" if module_name != "__main__" else ""
+
+        for stmt in node.body:
+            if not isinstance(stmt, ast.If):
+                continue
+            for arm_name, arm_stmts in (('body', stmt.body), ('orelse', stmt.orelse)):
+                if not arm_stmts:
+                    continue
+                # Skip elif chains
+                if (arm_name == 'orelse'
+                        and len(arm_stmts) == 1
+                        and isinstance(arm_stmts[0], ast.If)):
+                    continue
+                if not self._is_cold_stmts(arm_stmts):
+                    continue
+
+                free_vars = self._cold_free_vars(arm_stmts, local_types)
+                helper_name = f"_ch_{prefix}{node.name}_{self._cold_helper_counter}"
+                self._cold_helper_counter += 1
+
+                param_pairs = [(local_types[v], v) for v in free_vars if v in local_types]
+                param_str = ", ".join(f"{ct} {vn}" for ct, vn in param_pairs) or "void"
+                attrs = "cold, noreturn" if self._cold_all_raise(arm_stmts) else "cold"
+
+                self.emit(f"static void __attribute__(({attrs})) {helper_name}({param_str}) {{")
+                self.indent += 1
+
+                # Compile arm body with a temporary scope
+                saved = {
+                    'func_args': self.func_args.copy(),
+                    'local_vars': self.local_vars.copy(),
+                    'current_func_ret_type': self.current_func_ret_type,
+                    'defer_stack': getattr(self, 'defer_stack', [])[:]
+                }
+                self.func_args = {vn: ct for ct, vn in param_pairs}
+                self.local_vars = {vn: ct for ct, vn in param_pairs}
+                self.current_func_ret_type = "void"
+                self.defer_stack = []
+                for s in arm_stmts:
+                    self.compile_stmt(s)
+                for k, v in saved.items():
+                    setattr(self, k, v)
+
+                self.indent -= 1
+                self.emit("}")
+                self.emit("")
+
+                self._cold_splits[id(stmt)] = {
+                    'arm': arm_name,
+                    'name': helper_name,
+                    'free_vars': free_vars,
+                }
+                break  # one arm per if-statement
+
+    # -------------------------------------------------------------------
+    # Hot call-site constant specialization
+    # -------------------------------------------------------------------
+
+    def _scan_and_emit_specializations(self, node: ast.FunctionDef, module_name: str):
+        """For @hot functions: emit specialized callees for constant-arg call sites.
+
+        Threshold:
+          ≤ 3 distinct constant combinations per callee → specialize freely (no size limit).
+          > 3 distinct combinations              → only if callee body has ≤ 30 statements.
+        The biggest wins come from *large* functions where constants eliminate branches
+        and unlock vectorization — so there is no hard size cap by default.
+        """
+        if "hot" not in self.get_decorators(node):
+            return
+        if not hasattr(self, '_spec_cache'):
+            self._spec_cache = {}
+        if not hasattr(self, '_call_spec_map'):
+            self._call_spec_map = {}
+        if not hasattr(self, '_spec_counter'):
+            self._spec_counter = 0
+
+        all_func_defs = getattr(self, '_all_func_defs', {})
+        prefix = f"{module_name}_" if module_name != "__main__" else ""
+
+        # ---- First pass: collect all constant-arg sites, grouped by callee ----
+        # callee_name → list of (call_node, const_args dict, spec_key)
+        callee_sites: dict = {}
+        for stmt in node.body:
+            for n in ast.walk(stmt):
+                if not isinstance(n, ast.Call) or not isinstance(n.func, ast.Name):
+                    continue
+                callee_name = n.func.id
+                callee_def = all_func_defs.get(callee_name)
+                if callee_def is None:
+                    continue
+                callee_params = callee_def.args.args
+                const_args = {}
+                for idx, arg in enumerate(n.args):
+                    if isinstance(arg, ast.Constant) and idx < len(callee_params):
+                        const_args[idx] = (callee_params[idx].arg, arg.value)
+                if not const_args:
+                    continue
+                spec_key = (callee_name,
+                            frozenset((pn, pv) for pn, pv in const_args.values()))
+                callee_sites.setdefault(callee_name, []).append((n, const_args, spec_key))
+
+        # ---- Second pass: decide and emit ----
+        import copy as _copy
+        for callee_name, sites in callee_sites.items():
+            callee_def = all_func_defs[callee_name]
+            distinct_keys = {sk for _, _, sk in sites}
+            n_distinct = len(distinct_keys)
+
+            # Size gating: only applies when > 3 distinct constants
+            if n_distinct > 3:
+                stmt_count = sum(1 for s in callee_def.body
+                                 for n in ast.walk(s) if isinstance(n, ast.stmt))
+                if stmt_count > 30:
+                    continue  # too many variants of a large function → skip
+
+            for call_node, const_args, spec_key in sites:
+                if spec_key not in self._spec_cache:
+                    spec_name = f"_spec_{prefix}{callee_name}_{self._spec_counter}"
+                    self._spec_counter += 1
+                    cloned = _copy.deepcopy(callee_def)
+                    subs = {pn: pv for pn, pv in const_args.values()}
+                    class _Subst(ast.NodeTransformer):
+                        def visit_Name(self, nd):
+                            if nd.id in subs:
+                                return ast.Constant(value=subs[nd.id])
+                            return nd
+                    cloned = _Subst().visit(cloned)
+                    ast.fix_missing_locations(cloned)
+                    cloned.args.args = [p for i, p in enumerate(callee_def.args.args)
+                                        if i not in const_args]
+                    cloned.args.defaults = []
+                    cloned.decorator_list = [
+                        d for d in cloned.decorator_list
+                        if not (isinstance(d, ast.Name) and d.id in ('hot', 'test'))
+                    ]
+                    cloned.name = spec_name
+                    self.emit("// specialization: " + callee_name + " with "
+                              + ", ".join(f"{pn}={pv}" for pn, pv in subs.items()))
+                    self.compile_function(cloned, module_name)
+                    self.emit("")
+                    self._spec_cache[spec_key] = (spec_name, const_args)
+                else:
+                    spec_name, _ = self._spec_cache[spec_key]
+                non_const_indices = [i for i in range(len(call_node.args))
+                                     if i not in const_args]
+                self._call_spec_map[id(call_node)] = (spec_name, non_const_indices)
+
     def compile_function(self, node: ast.FunctionDef, module_name: str, prototype_only: bool = False):
         if not prototype_only:
             # Pre-scan body for lambda expressions, emit static helper functions before this function
             self._scan_and_emit_lambdas(node.body)
+            self._scan_and_emit_cold_branches(node, module_name)
+            self._scan_and_emit_specializations(node, module_name)
         ret_type = map_type(node.returns)
         self.current_func_ret_type = ret_type
         args = []
@@ -1225,6 +1450,58 @@ class StmtMixin:
         return self.current_func_ret_type
 
     def compile_if(self, node: ast.If):
+        # Hot/cold splitting: arm was extracted → emit a call to the static cold helper
+        _split = getattr(self, '_cold_splits', {}).get(id(node))
+        if _split:
+            _cond = self.compile_expr(node.test)
+            _call_args = ', '.join(_split['free_vars'])
+            _call = f"{_split['name']}({_call_args})"
+            if _split['arm'] == 'body':
+                self.emit(f"if (MP_UNLIKELY({_cond})) {{")
+                self.indent += 1
+                self.emit(f"{_call};")
+                self.indent -= 1
+                if node.orelse:
+                    self.emit("} else {")
+                    self.indent += 1
+                    for s in node.orelse:
+                        self.compile_stmt(s)
+                    self.indent -= 1
+                self.emit("}")
+            else:  # cold arm is the else
+                self.emit(f"if ({_cond}) {{")
+                self.indent += 1
+                for s in node.body:
+                    self.compile_stmt(s)
+                self.indent -= 1
+                self.emit("} else {")
+                self.indent += 1
+                self.emit(f"{_call};")
+                self.indent -= 1
+                self.emit("}")
+            return
+
+        # Branch-free select: if cond: x = a \n else: x = b with pure a, b
+        # → x = (cond) ? (a) : (b)  — lets the C compiler emit cmov
+        if (len(node.body) == 1
+                and len(node.orelse) == 1
+                and isinstance(node.body[0], ast.Assign)
+                and isinstance(node.orelse[0], ast.Assign)
+                and len(node.body[0].targets) == 1
+                and len(node.orelse[0].targets) == 1
+                and isinstance(node.body[0].targets[0], ast.Name)
+                and isinstance(node.orelse[0].targets[0], ast.Name)
+                and node.body[0].targets[0].id == node.orelse[0].targets[0].id
+                and _is_pure_expr(node.body[0].value)
+                and _is_pure_expr(node.orelse[0].value)
+                and _is_pure_expr(node.test)):
+            _lhs = self.compile_expr(node.body[0].targets[0])
+            _cond = self.compile_expr(node.test)
+            _val_a = self.compile_expr(node.body[0].value)
+            _val_b = self.compile_expr(node.orelse[0].value)
+            self.emit(f"{_lhs} = (({_cond}) ? ({_val_a}) : ({_val_b}));")
+            return
+
         cond = self.compile_expr(node.test)
         # __bool__ dispatch: if a struct has a __bool__ method, call it
         test_type = self.infer_type(node.test)
@@ -1478,6 +1755,11 @@ class StmtMixin:
                 if len(args) == 1:
                     stop = self.compile_expr(args[0])
                     self._emit_simd_pragma()
+                    # Trip-count hint: known small bound → unroll pragma
+                    if (isinstance(args[0], ast.Constant)
+                            and isinstance(args[0].value, int)
+                            and 2 <= args[0].value <= 8):
+                        self.emit(f"#pragma GCC unroll {args[0].value}")
                     self.emit(f"for (int64_t {target} = 0; {target} < {stop}; {target}++) {{")
                 elif len(args) == 2:
                     start = self.compile_expr(args[0])

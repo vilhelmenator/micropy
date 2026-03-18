@@ -262,7 +262,7 @@ Items marked ✅ are already implemented.
   manually is tedious. The C compiler cannot insert `restrict` — it's a promise only
   the source author can make.
 
-- [ ] **Branch-free select for side-effect-free ternaries**
+- [x] **Branch-free select for side-effect-free ternaries**
   `x = a if cond else b` where both `a` and `b` are pure expressions (literals,
   locals, arithmetic — no calls, no pointer derefs with possible side effects) →
   emit as a C ternary `x = cond ? a : b` with a compiler hint, or as
@@ -270,7 +270,7 @@ Items marked ✅ are already implemented.
   `if/else` to `cmov`, but bails when it can't prove both arms are side-effect-free.
   MicroPy knows this from the AST — the purity check is a leaf-node type test.
 
-- [ ] **Loop trip-count hints for known bounds**
+- [x] **Loop trip-count hints for known bounds**
   When `for i in range(N)` has N known at compile time or traceable to a constant
   call-site argument, emit `#pragma GCC unroll N` (for small N) or
   `__builtin_expect(n, N)` on the loop bound. The C compiler must analyze this
@@ -278,15 +278,22 @@ Items marked ✅ are already implemented.
 
 ### Requires call-graph or cross-function view
 
-- [ ] **Hot call-site constant specialization**
+- [x] **Hot call-site constant specialization**
   If a function is called from a hot loop with a constant argument (e.g. a stride,
-  a flag, a dimension), emit a specialized copy with that constant folded in. Only
-  for small functions (≤ 20 AST nodes) at call sites inside `@hot` functions or
-  `@unroll` loops. The constant enables the C compiler to vectorize and strength-
-  reduce in ways it can't with a variable. MicroPy sees both the call site and the
-  callee body — LTO sometimes does this, but only for trivial inlining candidates.
+  a flag, a dimension), emit a specialized copy with that constant folded in. The
+  constant enables the C compiler to vectorize and strength-reduce in ways it can't
+  with a variable — a matrix multiply with a constant stride, a tree traversal with
+  a constant depth limit, a filter with a constant flag. The biggest wins come from
+  *larger* functions where constant propagation eliminates branches and unlocks
+  vectorization, so no size cap on the callee. MicroPy sees both the call site and the
+  callee body; LTO sometimes does this, but only for trivial inlining candidates.
 
-- [ ] **Intra-function hot/cold splitting**
+  **Specialization threshold:** specialize freely when ≤ 3 distinct constant values
+  are seen across all call sites (one copy per constant, negligible bloat). Above 3
+  distinct constants, only specialize if the function is small (≤ 30 statements) to
+  bound code size. Functions inside `@hot` or `@unroll` contexts are always eligible.
+
+- [x] **Intra-function hot/cold splitting**
   When an `if` branch contains only error handling, logging, or calls to `@cold`
   functions, extract it into a separate `static __attribute__((cold))` helper and
   replace the branch with a call. Keeps the hot path's instruction footprint tight

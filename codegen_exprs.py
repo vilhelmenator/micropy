@@ -307,6 +307,13 @@ class ExprMixin:
         return compiled
 
     def compile_call(self, node: ast.Call) -> str:
+        # Constant specialization: if this call was mapped to a specialized callee, use it
+        _spec = getattr(self, '_call_spec_map', {}).get(id(node))
+        if _spec:
+            spec_name, non_const_indices = _spec
+            spec_args = [self.compile_expr(node.args[i]) for i in non_const_indices]
+            return f"{spec_name}({', '.join(spec_args)})"
+
         # Fill in default arguments for user-defined functions before compiling
         if isinstance(node.func, ast.Name):
             fname = node.func.id

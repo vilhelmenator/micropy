@@ -90,6 +90,7 @@ class Compiler(StmtMixin, ExprMixin):
     _compile_time_funcs: set = field(default_factory=set)  # names of @compile_time functions
     _compile_time_arrays: set = field(default_factory=set) # names of @compile_time static arrays
     _cold_funcs: set = field(default_factory=set)          # names of @cold-decorated functions
+    _all_func_defs: dict = field(default_factory=dict)     # fname → ast.FunctionDef for specialization
 
     thread_wrappers_emitted: set = field(default_factory=set)
     current_func_ret_type: str = "void"
@@ -1028,6 +1029,9 @@ class Compiler(StmtMixin, ExprMixin):
 
             if isinstance(node, ast.FunctionDef):
                 decs = self.get_decorators(node)
+                # Store for specialization lookups (skip extern — no visible body)
+                if "extern" not in decs:
+                    self._all_func_defs[node.name] = node
 
                 # @extern: register signature, emit no definition
                 if "extern" in decs:
