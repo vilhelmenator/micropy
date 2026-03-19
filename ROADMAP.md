@@ -299,3 +299,172 @@ Items marked ✅ are already implemented.
   replace the branch with a call. Keeps the hot path's instruction footprint tight
   for I-cache. Extension of the existing `@cold` inference — same detection logic,
   but emits an extracted function instead of just an annotation.
+## Auto-generated Serialization (`@serializable`)
+
+The compiler has full knowledge of every struct's field types, nesting, and pointer
+relationships at compile time. Use this to generate bespoke serialize/deserialize
+functions per struct — no runtime reflection, no external schema files, no separate
+`.fbs` or `.proto` to maintain. The `.mpy` source is the schema.
+
+### Phase 1 — Byte buffer primitives (`micropy_rt.h`)
+
+- [x] **`MpWriter` / `MpReader` — general-purpose binary I/O**
+  Add two small structs to the runtime. `MpWriter` owns a growable `ptr[byte]`
+  buffer with a write cursor. `MpReader` holds a `ptr[byte]` and a read cursor.
+
+  Design these as general-purpose binary buffer primitives — not serialization-
+  specific. They should be equally useful for network protocols, binary file
+  formats, logging, and message packing. Keep the API minimal and composable.
+
+  Primitives to implement:
+  - `mp_writer_new(initial_capacity)` / `mp_writer_free(w)`
+  - `mp_writer_pos(w)` — return current write offset
+  - `mp_write_bytes(w, ptr, len)` — raw memcpy into buffer, grow if needed
+  - `mp_write_i8/i16/i32/i64/u8/u16/u32/u64/f32/f64(w, value)`
+  - `mp_write_str(w, s)` — write length as `i32` then bytes
+  - `mp_write_bool(w, b)` — single byte, doubles as null/present flag
+  - `mp_writer_to_bytes(w, out_len)` — return the final buffer
+  - `mp_reader_new(buf, len)` / matching `mp_read_*` functions
+  - `mp_reader_pos(r)` — return current read offset
+
+  ~100–150 lines of C. No dependencies beyond stdlib. No serialization-specific
+  concepts like identity maps or version headers — those belong in the generated
+  code, not the runtime.
+
+### Phase 2 — Flat struct serialization *(compiler changes)*
+
+- [x] **`@serializable` on scalar-only structs (memcpy fast path)**
+  Handle structs that contain only scalar fields and nested value-type structs
+  (no pointers, no strings, no lists).
+
+  - First pass: record `@serializable` structs in a set. For each, check if all
+    fields are flat (scalar or another flat `@serializable` struct). If so, mark
+    as `flat_serializable`.
+  - Codegen: emit `serialize_StructName(MpWriter* w, StructName* v)` and
+    `deserialize_StructName(MpReader* r, StructName* v)`. For flat structs the
+    body is a single `mp_write_bytes(w, v, sizeof(StructName))` and matching read.
+
+- [x] **Version / hash header**
+  Emit a 4-byte struct hash as the first thing written by every `serialize_*`
+  function. Compute the hash at compile time from the struct's field names, types,
+  and order. On deserialize, compare the hash and abort with a clear error message
+  if it doesn't match.
+
+  Optional `@version(N)` decorator for explicit versioning. If present, the
+  version number is written instead of the hash. On load with an older version,
+  zero-fill fields that were appended after that version. Reordering or removing
+  fields without bumping the version is a compile-time error.
+
+### Phase 3 — Strings, pointers, and nested structs
+
+- [x] **Field-type dispatch in codegen**
+  Extend the serialization emitter to handle non-flat fields. Walk struct fields
+  in declaration order and emit one call per field based on its type:
+
+  | Field type | Serialization |
+  |------------|---------------|
+  | Scalar (`i32`, `f64`, …) | `mp_write_<type>(w, v->field)` |
+  | Nested value struct | `serialize_Inner(w, &v->field)` — inline recursive call |
+  | `str` | `mp_write_str(w, v->field)` — length-prefixed bytes |
+  | `ptr[T]` (`T` is `@serializable`) | Write 1-byte present flag (0=null, 1=present), then `serialize_T(w, v->field)` if present |
+  | `array[T, N]` | Write N elements in order, each serialized by type |
+  | `list[T]` | Write `i32` length, then each element |
+
+  Deserialize reads back in the same order and reconstructs. Strings allocate via
+  `str_new`, pointers via `alloc`, lists via `list_new`.
+
+  This handles tree-shaped data where nothing is shared. Serialization is inline
+  depth-first — no offset management, no deduplication.
+
+### Phase 4 — Shared references and file I/O
+
+- [x] **Compiler-generated graph serialization**
+  When a `@serializable` struct contains `ptr[T]` fields pointing to other
+  `@serializable` structs, the compiler knows the full type graph at compile time.
+  It generates `save_*` / `load_*` functions that handle shared references
+  automatically — the user never writes bottom-up ordering by hand.
+
+  **Generated `save_StructName`:**
+
+  1. **Collect phase** — walk the object graph depth-first from the root. For every
+     `ptr[T]` to a `@serializable` struct, record the pointer in a seen-set
+     (stack-allocated or `alloca`'d flat array). If already seen, skip. This
+     produces a deduplicated list of unique objects in depth-first order.
+
+  2. **Topo-sort** — reverse the list so leaves come first, parents come last.
+     The compiler knows which struct types can contain pointers to which other
+     types — the dependency edges are static. The runtime sort only orders the
+     concrete instances within that known structure.
+
+  3. **Write phase** — iterate the sorted list. Serialize each object into the
+     `MpWriter`, record its buffer offset in a pointer→offset map (a small flat
+     array, indexed by the object's position in the sorted list). When a parent
+     writes a `ptr[T]` field, look up the child's offset and write it as an `i32`.
+
+  4. **Write the root** — serialize the root struct last, with all child offsets
+     already resolved.
+
+  **Generated `load_StructName`:**
+
+  1. Read objects in the same order they were written (leaves first).
+  2. Allocate each object, deserialize its scalar/string fields.
+  3. Store each object's pointer in an offset→pointer map (flat array, same size).
+  4. When reading a `ptr[T]` field, read the `i32` offset, look up the map, and
+     assign the pointer.
+  5. Return the root.
+
+  **Seen-set and offset map sizing:** for struct graphs with only fixed `ptr[T]`
+  fields (no `list[ptr[T]]`), the compiler knows the maximum object count at
+  compile time — the seen-set and offset maps can be stack-allocated flat arrays.
+  When `list[ptr[T]]` fields are present (unbounded fan-out), the collect phase
+  uses a growable buffer instead — either a realloc'd array or an `MpWriter`
+  repurposed as a scratch allocator. The compiler emits the right strategy per
+  struct based on whether any `list[ptr[T]]` appears in the type graph.
+
+  ```python
+  @serializable
+  struct Material:
+      color: Vec3
+      roughness: f32
+
+  @serializable
+  struct Entity:
+      name: str
+      mesh: ptr[Mesh]
+      material: ptr[Material]
+      children: list[ptr[Entity]]
+
+  # user just calls:
+  save_Entity("scene.bin", root)
+  root: ptr[Entity] = load_Entity("scene.bin")
+  ```
+
+  The compiler sees that `Entity` contains `ptr[Mesh]`, `ptr[Material]`, and
+  `list[ptr[Entity]]`. It generates `save_Entity` that walks the entity tree,
+  collects all unique meshes, materials, and child entities, serializes leaves
+  first, and writes offsets for shared references. The user never thinks about
+  serialization order.
+
+  **Cycle handling:** if the struct graph can contain cycles (e.g. parent
+  pointers), fields marked `@backref` are skipped during the collect phase and
+  written as null. The deserializer reconstructs backrefs from the tree structure
+  after all forward references are resolved.
+
+  **File I/O wrappers:** `save_*` opens the file, creates an `MpWriter`,
+  runs the graph serialization, writes the buffer, closes. `load_*` reads the
+  file into a buffer, creates an `MpReader`, deserializes, returns a
+  `Result[ptr[T]]` so version mismatches and I/O errors propagate cleanly.
+
+### Testing
+
+| Phase | Test |
+|-------|------|
+| 1 | `MpWriter`/`MpReader` round-trip: write mixed types, read back, verify values |
+| 2 | Round-trip a flat struct (write → read → compare all fields) |
+| 2 | Version mismatch: change a field, verify load rejects old data with clear error |
+| 3 | Round-trip struct with strings and nested pointers, verify content and structure |
+| 3 | Round-trip with null `ptr[T]` fields, verify nulls survive |
+| 4 | Two entities sharing one material → save/load → verify both resolve to same object |
+| 4 | Entity tree with children → save/load → verify tree structure intact |
+| 4 | Cyclic parent pointer with `@backref` → verify no infinite loop, parent reconstructed |
+| 4 | File I/O round-trip, verify file on disk matches expected size |

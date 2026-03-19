@@ -32,6 +32,7 @@ python3 mpy.py program.mpy --watch                # rebuild on save
 python3 mpy.py program.mpy --flags="-O2 -march=native"   # extra compiler/linker flags
 python3 mpy.py program.mpy --flags="-lssl -lz"           # link extra libraries
 python3 mpy.py program.mpy --no-line-directives           # omit #line directives from C output
+python3 snekc.py                                          # interactive REPL
 ```
 
 ## Language reference
@@ -627,6 +628,68 @@ dir:  str = path_dirname("/home/user/file.txt")    # "/home/user"
 p:    str = path_join("/tmp", "output.c")
 ```
 
+### Serialization
+
+Mark a struct `@serializable` and the compiler generates `serialize_X`/`deserialize_X` functions automatically — no schema files, no runtime reflection:
+
+```python
+@serializable
+struct Vec3:
+    x: f64
+    y: f64
+    z: f64
+
+@serializable
+struct Entity:
+    name: str
+    position: Vec3
+    parent: ptr[Entity]
+```
+
+**Inline serialization** — for writing to buffers, network, or custom formats:
+
+```python
+w: ptr[MpWriter] = writer_new(256)
+v: Vec3 = Vec3(1.0, 2.0, 3.0)
+serialize_Vec3(w, addr_of(v))
+
+out_len: i64 = 0
+buf: ptr[u8] = writer_to_bytes(w, addr_of(out_len))
+# ... send buf over network, write to file, etc.
+```
+
+**Graph serialization** — for structs with `ptr[T]` fields, the compiler generates `save_X`/`load_X` that handle shared references and file I/O automatically:
+
+```python
+save_Entity("scene.bin", root)
+root: ptr[Entity] = load_Entity("scene.bin")
+```
+
+The compiler walks the object graph depth-first, deduplicates shared pointers, serializes leaves first, and writes pointer fields as indices. On load, all objects are allocated and pointer references are reconstructed. The `.mpy` source is the schema.
+
+**Cycle handling** — use `backref[T]` on fields that point back up the tree (e.g. parent pointers). These are skipped during graph collection to prevent infinite loops:
+
+```python
+@serializable
+struct Node:
+    value: i32
+    children: ptr[Node]
+    parent: backref[ptr[Node]]
+```
+
+**Schema validation** — every serialized struct includes a 4-byte hash computed from its field names, types, and order. Deserialization aborts with a clear error if the schema has changed.
+
+**Supported field types:** scalars (`int`, `float`, `bool`, fixed-width integers), `str`, nested `@serializable` structs (by value), `ptr[T]` to `@serializable` structs, `array[T, N]` with scalar or struct elements.
+
+`MpWriter`/`MpReader` are general-purpose binary I/O primitives — usable directly for network protocols, binary file formats, or custom serialization:
+
+```python
+w: ptr[MpWriter] = writer_new(64)
+write_i32(w, 42)
+write_f64(w, 3.14)
+write_str(w, my_string)
+```
+
 ### Inline C
 
 ```python
@@ -776,6 +839,30 @@ def main() -> void:
 ```
 
 `hotreload_open/sym/close` wrap `dlopen`/`dlsym`/`dlclose` on POSIX and `LoadLibrary`/`GetProcAddress`/`FreeLibrary` on Windows.
+
+### Interactive shell
+
+`snekc` is a live REPL that compiles each line through micropy → C → native code:
+
+```sh
+python3 snekc.py
+```
+
+```
+>>> x: int = 42
+>>> y: int = x + 8
+>>> print(y)
+50
+>>> struct Vec2:
+...     x: float
+...     y: float
+...
+>>> v: Vec2 = Vec2(3.0, 4.0)
+>>> print(v.x)
+3.000000
+```
+
+Variables become C globals that persist between evaluations. State is transferred via `ctypes` between compilations. Structs and functions can be redefined — the new definition replaces the old one. Failed compilations roll back without corrupting state.
 
 ### Build system
 
@@ -953,6 +1040,7 @@ This means including a micropy module header in C++ or C code never silently pul
 | `codegen_exprs.py` | Expression code generation               |
 | `type_map.py`      | Type annotation → C type mapping         |
 | `build.py`         | Build script interpreter                 |
+| `snekc.py`         | Interactive REPL shell                   |
 | `micropy_types.h`  | Forward declarations only — safe to include from any generated header |
 | `micropy_rt.h`     | Full runtime: strings, lists, dicts, I/O, concurrency, … |
 | `micropy_test.h`   | Test runner infrastructure               |

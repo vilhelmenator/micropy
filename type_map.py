@@ -106,6 +106,9 @@ def map_type(annotation, type_map=None) -> str:
                 return f"const {inner}"
             if base.id == "bitfield":
                 return "__bitfield__"
+            if base.id == "backref":
+                inner = map_type(annotation.slice, type_map)
+                return f"__backref__ {inner}"
             if base.id == "Result":
                 inner = map_type(annotation.slice, type_map)
                 return f"Result_{mangle_type(inner)}"

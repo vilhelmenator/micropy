@@ -974,6 +974,184 @@ static inline void hotreload_close(void* lib) {
 }
 #endif
 
+/* ---- Binary I/O (MpWriter / MpReader) ---- */
+
+struct MpWriter {
+    uint8_t* data;
+    int64_t len;
+    int64_t cap;
+};
+
+static inline MpWriter* mp_writer_new(int64_t initial_cap) {
+    MpWriter* w = (MpWriter*)malloc(sizeof(MpWriter));
+    if (initial_cap < 64) initial_cap = 64;
+    w->data = (uint8_t*)malloc(initial_cap);
+    w->len = 0;
+    w->cap = initial_cap;
+    return w;
+}
+
+static inline void mp_writer_free(MpWriter* w) {
+    if (w) { free(w->data); free(w); }
+}
+
+static inline int64_t mp_writer_pos(MpWriter* w) { return w->len; }
+
+static inline void _mp_writer_grow(MpWriter* w, int64_t need) {
+    if (w->len + need <= w->cap) return;
+    while (w->cap < w->len + need) w->cap *= 2;
+    w->data = (uint8_t*)realloc(w->data, w->cap);
+}
+
+static inline void mp_write_bytes(MpWriter* w, const void* ptr, int64_t n) {
+    _mp_writer_grow(w, n);
+    memcpy(w->data + w->len, ptr, n);
+    w->len += n;
+}
+
+static inline void mp_write_i8 (MpWriter* w, int8_t   v) { mp_write_bytes(w, &v, 1); }
+static inline void mp_write_i16(MpWriter* w, int16_t  v) { mp_write_bytes(w, &v, 2); }
+static inline void mp_write_i32(MpWriter* w, int32_t  v) { mp_write_bytes(w, &v, 4); }
+static inline void mp_write_i64(MpWriter* w, int64_t  v) { mp_write_bytes(w, &v, 8); }
+static inline void mp_write_u8 (MpWriter* w, uint8_t  v) { mp_write_bytes(w, &v, 1); }
+static inline void mp_write_u16(MpWriter* w, uint16_t v) { mp_write_bytes(w, &v, 2); }
+static inline void mp_write_u32(MpWriter* w, uint32_t v) { mp_write_bytes(w, &v, 4); }
+static inline void mp_write_u64(MpWriter* w, uint64_t v) { mp_write_bytes(w, &v, 8); }
+static inline void mp_write_f32(MpWriter* w, float    v) { mp_write_bytes(w, &v, 4); }
+static inline void mp_write_f64(MpWriter* w, double   v) { mp_write_bytes(w, &v, 8); }
+static inline void mp_write_bool(MpWriter* w, int     v) { uint8_t b = v ? 1 : 0; mp_write_bytes(w, &b, 1); }
+
+static inline void mp_write_str(MpWriter* w, MpStr* s) {
+    int32_t slen = (int32_t)s->len;
+    mp_write_bytes(w, &slen, 4);
+    mp_write_bytes(w, s->data, slen);
+}
+
+static inline uint8_t* mp_writer_to_bytes(MpWriter* w, int64_t* out_len) {
+    *out_len = w->len;
+    uint8_t* buf = w->data;
+    w->data = NULL;
+    w->len = 0;
+    w->cap = 0;
+    return buf;
+}
+
+struct MpReader {
+    const uint8_t* data;
+    int64_t len;
+    int64_t pos;
+};
+
+static inline MpReader* mp_reader_new(const uint8_t* buf, int64_t len) {
+    MpReader* r = (MpReader*)malloc(sizeof(MpReader));
+    r->data = buf;
+    r->len = len;
+    r->pos = 0;
+    return r;
+}
+
+static inline void mp_reader_free(MpReader* r) { if (r) free(r); }
+
+static inline int64_t mp_reader_pos(MpReader* r) { return r->pos; }
+
+static inline void mp_read_bytes(MpReader* r, void* dst, int64_t n) {
+    if (r->pos + n > r->len) {
+        fprintf(stderr, "MpReader: read past end (pos=%lld, need=%lld, len=%lld)\n",
+                (long long)r->pos, (long long)n, (long long)r->len);
+        abort();
+    }
+    memcpy(dst, r->data + r->pos, n);
+    r->pos += n;
+}
+
+static inline int8_t   mp_read_i8 (MpReader* r) { int8_t   v; mp_read_bytes(r, &v, 1); return v; }
+static inline int16_t  mp_read_i16(MpReader* r) { int16_t  v; mp_read_bytes(r, &v, 2); return v; }
+static inline int32_t  mp_read_i32(MpReader* r) { int32_t  v; mp_read_bytes(r, &v, 4); return v; }
+static inline int64_t  mp_read_i64(MpReader* r) { int64_t  v; mp_read_bytes(r, &v, 8); return v; }
+static inline uint8_t  mp_read_u8 (MpReader* r) { uint8_t  v; mp_read_bytes(r, &v, 1); return v; }
+static inline uint16_t mp_read_u16(MpReader* r) { uint16_t v; mp_read_bytes(r, &v, 2); return v; }
+static inline uint32_t mp_read_u32(MpReader* r) { uint32_t v; mp_read_bytes(r, &v, 4); return v; }
+static inline uint64_t mp_read_u64(MpReader* r) { uint64_t v; mp_read_bytes(r, &v, 8); return v; }
+static inline float    mp_read_f32(MpReader* r) { float    v; mp_read_bytes(r, &v, 4); return v; }
+static inline double   mp_read_f64(MpReader* r) { double   v; mp_read_bytes(r, &v, 8); return v; }
+static inline int      mp_read_bool(MpReader* r) { uint8_t b; mp_read_bytes(r, &b, 1); return b ? 1 : 0; }
+
+static inline MpStr* mp_read_str(MpReader* r) {
+    int32_t slen;
+    mp_read_bytes(r, &slen, 4);
+    MpStr* s = (MpStr*)malloc(sizeof(MpStr));
+    s->len = slen;
+    s->data = (char*)malloc(slen + 1);
+    mp_read_bytes(r, s->data, slen);
+    s->data[slen] = '\0';
+    return s;
+}
+
+/* ---- Pointer Set (for graph serialization) ---- */
+
+typedef struct MpPtrSet {
+    void** ptrs;
+    uint32_t* types;
+    int32_t count;
+    int32_t cap;
+} MpPtrSet;
+
+static inline void mp_ptrset_init(MpPtrSet* s, int32_t cap) {
+    s->ptrs = (void**)malloc(sizeof(void*) * cap);
+    s->types = (uint32_t*)malloc(sizeof(uint32_t) * cap);
+    s->count = 0;
+    s->cap = cap;
+}
+
+static inline int32_t mp_ptrset_find(MpPtrSet* s, void* p) {
+    for (int32_t i = 0; i < s->count; i++) {
+        if (s->ptrs[i] == p) return i;
+    }
+    return -1;
+}
+
+static inline int32_t mp_ptrset_add(MpPtrSet* s, void* p, uint32_t type_hash) {
+    int32_t idx = mp_ptrset_find(s, p);
+    if (idx >= 0) return idx;
+    if (s->count >= s->cap) {
+        s->cap *= 2;
+        s->ptrs = (void**)realloc(s->ptrs, sizeof(void*) * s->cap);
+        s->types = (uint32_t*)realloc(s->types, sizeof(uint32_t) * s->cap);
+    }
+    idx = s->count++;
+    s->ptrs[idx] = p;
+    s->types[idx] = type_hash;
+    return idx;
+}
+
+static inline void mp_ptrset_free(MpPtrSet* s) {
+    free(s->ptrs);
+    free(s->types);
+}
+
+/* ---- Binary File I/O ---- */
+
+static inline int mp_write_file_bin(const char* path, const uint8_t* buf, int64_t len) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return -1;
+    fwrite(buf, 1, len, f);
+    fclose(f);
+    return 0;
+}
+
+static inline uint8_t* mp_read_file_bin(const char* path, int64_t* out_len) {
+    FILE* f = fopen(path, "rb");
+    if (!f) { *out_len = 0; return NULL; }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t* buf = (uint8_t*)malloc(sz);
+    fread(buf, 1, sz, f);
+    fclose(f);
+    *out_len = (int64_t)sz;
+    return buf;
+}
+
 /* input(prompt?) — read a line from stdin, strip trailing newline */
 static inline MpStr* mp_input(const char* prompt) {
     if (prompt) { fputs(prompt, stdout); fflush(stdout); }

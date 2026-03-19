@@ -50,6 +50,8 @@ typedef struct MpThreadPool MpThreadPool;
 typedef struct MpThread     MpThread;
 typedef struct MpMutex      MpMutex;
 typedef struct MpCond       MpCond;
+typedef struct MpWriter     MpWriter;
+typedef struct MpReader     MpReader;
 
 /* Debug allocation counter — referenced by micropy_rt.h debug wrappers.
  * The definition lives in the main translation unit (emitted by the compiler

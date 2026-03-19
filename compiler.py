@@ -111,6 +111,7 @@ class Compiler(StmtMixin, ExprMixin):
     func_param_order: dict = field(default_factory=dict) # fname → [param_name, ...] in declared order
     func_param_types: dict = field(default_factory=dict)  # fname → [ctype, ...] for all params (incl. self)
     struct_array_fields: dict = field(default_factory=dict)  # (struct_name, field_name) → elem_ctype
+    struct_array_sizes: dict = field(default_factory=dict)   # (struct_name, field_name) → size_str
     soa_structs: set  = field(default_factory=set)           # struct names annotated @soa
     _soa_vars: dict   = field(default_factory=dict)          # varname → (struct_name, size_str, [(fname,ftype)])
     funcptr_alias_infos: dict = field(default_factory=dict)  # alias_name → (ret_ctype, [arg_ctypes])
@@ -129,6 +130,8 @@ class Compiler(StmtMixin, ExprMixin):
     _in_stream_func: bool = False     # current function has @stream — subscript writes → non-temporal stores
     _stream_loop_active: bool = False # inside a @stream for-range loop body right now
     debug_mode: bool = False                             # emit allocation tracking (--debug)
+    serializable_structs: set = field(default_factory=set)   # struct names with @serializable
+    backref_fields: set = field(default_factory=set)         # (struct_name, field_name) pairs
 
     def emit(self, line=""):
         prefix = "    " * self.indent
@@ -743,6 +746,8 @@ class Compiler(StmtMixin, ExprMixin):
                 return self.func_args[name]
             if name in self.constants:
                 return self.constants[name]
+            if name in self.mutable_globals:
+                return self.mutable_globals[name]
             return "int64_t"
 
         if isinstance(node, ast.BinOp):
@@ -913,6 +918,15 @@ class Compiler(StmtMixin, ExprMixin):
                 "atomic_load": "int64_t", "atomic_store": "void",
                 "atomic_cas": "int64_t",
                 "pool_new": "MpThreadPool*",
+                "writer_new": "MpWriter*", "writer_pos": "int64_t",
+                "writer_to_bytes": "uint8_t*",
+                "reader_new": "MpReader*", "reader_pos": "int64_t",
+                "read_i8": "int8_t", "read_i16": "int16_t",
+                "read_i32": "int32_t", "read_i64": "int64_t",
+                "read_u8": "uint8_t", "read_u16": "uint16_t",
+                "read_u32": "uint32_t", "read_u64": "uint64_t",
+                "read_f32": "float", "read_f64": "double",
+                "read_bool": "int", "read_str": "MpStr*",
             }
             if fname in rt_types:
                 return rt_types[fname]
@@ -925,6 +939,12 @@ class Compiler(StmtMixin, ExprMixin):
                     return elem_t
                 if fname == f"{list_name}_len":
                     return "int64_t"
+
+            # Generated save_X / load_X for @serializable graph structs
+            if fname.startswith("save_") and fname[5:] in self.serializable_structs:
+                return "void"
+            if fname.startswith("load_") and fname[5:] in self.serializable_structs:
+                return fname[5:] + "*"
 
             if fname in self.from_imports:
                 mod, real_name = self.from_imports[fname]
@@ -1163,17 +1183,24 @@ class Compiler(StmtMixin, ExprMixin):
                     for item in node.body:
                         if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
                             _ctype = map_type(item.annotation)
+                            # backref[T] → strip prefix, record for graph serialization
+                            if _ctype.startswith("__backref__ "):
+                                _ctype = _ctype[len("__backref__ "):]
+                                self.backref_fields.add((node.name, item.target.id))
                             fields.append((item.target.id, _ctype))
                             if _ctype == "__array__":
-                                _et, _ = get_array_info(item.annotation)
+                                _et, _sz = get_array_info(item.annotation)
                                 self.struct_array_fields[(node.name, item.target.id)] = _et
+                                self.struct_array_sizes[(node.name, item.target.id)] = _sz
                     mod_info.structs[node.name] = fields
                     self.structs[node.name] = fields
-                    # Track @soa-annotated structs
+                    # Track @soa and @serializable annotated structs
                     _soa_decs = [d.id if isinstance(d, ast.Name) else None
                                  for d in node.decorator_list]
                     if "soa" in _soa_decs:
                         self.soa_structs.add(node.name)
+                    if "serializable" in _soa_decs:
+                        self.serializable_structs.add(node.name)
 
                     # Register class methods as ClassName_methodname
                     for item in node.body:
@@ -1355,6 +1382,10 @@ class Compiler(StmtMixin, ExprMixin):
         for node in ast.iter_child_nodes(tree):
             if isinstance(node, ast.ClassDef) and node.name in self.structs:
                 self.compile_struct(node)
+
+        # Emit @serializable serialize/deserialize functions
+        if self.serializable_structs:
+            self._emit_serializable()
 
         # Emit mutable globals
         for name, ctype, annotation, value_node in mod_info.globals:
@@ -1614,6 +1645,408 @@ class Compiler(StmtMixin, ExprMixin):
         c_source = f"/* mpy_stamp: {_src_mtime:.6f} */\n" + c_source
 
         return c_source, h_source, mod_info
+
+    # ------------------------------------------------------------------
+    # @serializable — auto-generated serialize / deserialize
+    # ------------------------------------------------------------------
+
+    _SCALAR_WRITE = {
+        "int8_t": "mp_write_i8", "int16_t": "mp_write_i16",
+        "int32_t": "mp_write_i32", "int64_t": "mp_write_i64",
+        "uint8_t": "mp_write_u8", "uint16_t": "mp_write_u16",
+        "uint32_t": "mp_write_u32", "uint64_t": "mp_write_u64",
+        "float": "mp_write_f32", "double": "mp_write_f64",
+        "int": "mp_write_bool",
+    }
+    _SCALAR_READ = {
+        "int8_t": "mp_read_i8", "int16_t": "mp_read_i16",
+        "int32_t": "mp_read_i32", "int64_t": "mp_read_i64",
+        "uint8_t": "mp_read_u8", "uint16_t": "mp_read_u16",
+        "uint32_t": "mp_read_u32", "uint64_t": "mp_read_u64",
+        "float": "mp_read_f32", "double": "mp_read_f64",
+        "int": "mp_read_bool",
+    }
+
+    def _is_flat_serializable(self, sname: str) -> bool:
+        """Return True if all fields are scalars or nested flat @serializable structs."""
+        fields = self.structs.get(sname, [])
+        for _, ctype in fields:
+            if ctype in self._SCALAR_WRITE:
+                continue
+            if ctype in self.serializable_structs and self._is_flat_serializable(ctype):
+                continue
+            return False
+        return True
+
+    def _struct_hash(self, sname: str, fields: list) -> int:
+        """Compute a 4-byte hash from struct name, field names, and types."""
+        import hashlib
+        h = hashlib.sha256()
+        h.update(sname.encode())
+        for fname, ftype in fields:
+            h.update(fname.encode())
+            h.update(ftype.encode())
+            if ftype == "__array__":
+                et = self.struct_array_fields.get((sname, fname), "")
+                sz = self.struct_array_sizes.get((sname, fname), "")
+                h.update(f"array:{et}:{sz}".encode())
+        return int.from_bytes(h.digest()[:4], "little") & 0xFFFFFFFF
+
+    def _serializable_field_type(self, sname, fname, ftype):
+        """Classify a struct field for serialization. Returns one of:
+        'scalar', 'struct', 'str', 'ptr', 'array', or None (unsupported)."""
+        if ftype in self._SCALAR_WRITE:
+            return "scalar"
+        if ftype in self.serializable_structs:
+            return "struct"
+        if ftype == "MpStr*":
+            return "str"
+        if ftype.endswith("*") and ftype[:-1] in self.serializable_structs:
+            return "ptr"
+        if ftype == "__array__":
+            return "array"
+        return None
+
+    def _emit_serialize_field(self, sname, fname, ftype):
+        """Emit serialize code for one struct field."""
+        kind = self._serializable_field_type(sname, fname, ftype)
+        if kind == "scalar":
+            self.emit(f"{self._SCALAR_WRITE[ftype]}(w, v->{fname});")
+        elif kind == "struct":
+            self.emit(f"serialize_{ftype}(w, &v->{fname});")
+        elif kind == "str":
+            self.emit(f"mp_write_str(w, v->{fname});")
+        elif kind == "ptr":
+            base = ftype[:-1]
+            self.emit(f"mp_write_u8(w, v->{fname} != NULL ? 1 : 0);")
+            self.emit(f"if (v->{fname} != NULL) {{ serialize_{base}(w, v->{fname}); }}")
+        elif kind == "array":
+            et = self.struct_array_fields.get((sname, fname), "int64_t")
+            sz = self.struct_array_sizes.get((sname, fname), "0")
+            if et in self._SCALAR_WRITE:
+                # Bulk write for scalar arrays
+                self.emit(f"mp_write_bytes(w, v->{fname}, sizeof({et}) * {sz});")
+            elif et in self.serializable_structs:
+                self.emit(f"for (int64_t _i = 0; _i < {sz}; _i++) {{ serialize_{et}(w, &v->{fname}[_i]); }}")
+
+    def _emit_deserialize_field(self, sname, fname, ftype):
+        """Emit deserialize code for one struct field."""
+        kind = self._serializable_field_type(sname, fname, ftype)
+        if kind == "scalar":
+            self.emit(f"v->{fname} = {self._SCALAR_READ[ftype]}(r);")
+        elif kind == "struct":
+            self.emit(f"deserialize_{ftype}(r, &v->{fname});")
+        elif kind == "str":
+            self.emit(f"v->{fname} = mp_read_str(r);")
+        elif kind == "ptr":
+            base = ftype[:-1]
+            self.emit(f"if (mp_read_u8(r)) {{")
+            self.indent += 1
+            self.emit(f"v->{fname} = ({base}*)malloc(sizeof({base}));")
+            self.emit(f"deserialize_{base}(r, v->{fname});")
+            self.indent -= 1
+            self.emit(f"}} else {{ v->{fname} = NULL; }}")
+        elif kind == "array":
+            et = self.struct_array_fields.get((sname, fname), "int64_t")
+            sz = self.struct_array_sizes.get((sname, fname), "0")
+            if et in self._SCALAR_READ:
+                self.emit(f"mp_read_bytes(r, v->{fname}, sizeof({et}) * {sz});")
+            elif et in self.serializable_structs:
+                self.emit(f"for (int64_t _i = 0; _i < {sz}; _i++) {{ deserialize_{et}(r, &v->{fname}[_i]); }}")
+
+    def _emit_serializable(self):
+        """Emit serialize_X / deserialize_X for each @serializable struct."""
+        self.emit("/* ---- @serializable ---- */")
+
+        # Forward declarations (needed for recursive/cross-referencing structs)
+        for sname in self.serializable_structs:
+            self.emit(f"static inline void serialize_{sname}(MpWriter* w, {sname}* v);")
+            self.emit(f"static inline void deserialize_{sname}(MpReader* r, {sname}* v);")
+        self.emit("")
+
+        for sname in self.serializable_structs:
+            fields = self.structs.get(sname, [])
+            if not fields:
+                continue
+            is_flat = self._is_flat_serializable(sname)
+            shash = self._struct_hash(sname, fields)
+
+            # serialize_StructName(MpWriter* w, StructName* v)
+            self.emit(f"static inline void serialize_{sname}(MpWriter* w, {sname}* v) {{")
+            self.indent += 1
+            self.emit(f"mp_write_u32(w, {shash}u);")
+            if is_flat:
+                self.emit(f"mp_write_bytes(w, v, sizeof({sname}));")
+            else:
+                for fname, ftype in fields:
+                    self._emit_serialize_field(sname, fname, ftype)
+            self.indent -= 1
+            self.emit("}")
+            self.emit("")
+
+            # deserialize_StructName(MpReader* r, StructName* v)
+            self.emit(f"static inline void deserialize_{sname}(MpReader* r, {sname}* v) {{")
+            self.indent += 1
+            self.emit(f"uint32_t _hash = mp_read_u32(r);")
+            self.emit(f"if (_hash != {shash}u) {{")
+            self.indent += 1
+            self.emit(f'fprintf(stderr, "deserialize_{sname}: schema hash mismatch '
+                      f'(expected 0x%08x, got 0x%08x)\\n", {shash}u, _hash);')
+            self.emit(f"abort();")
+            self.indent -= 1
+            self.emit("}")
+            if is_flat:
+                self.emit(f"mp_read_bytes(r, v, sizeof({sname}));")
+            else:
+                for fname, ftype in fields:
+                    self._emit_deserialize_field(sname, fname, ftype)
+            self.indent -= 1
+            self.emit("}")
+            self.emit("")
+
+        # Emit graph serialization (save_X / load_X)
+        self._emit_graph_serialization()
+
+    def _has_serializable_ptr_fields(self, sname: str, visited=None) -> bool:
+        """Return True if this struct or any reachable struct has ptr[T] to @serializable."""
+        if visited is None:
+            visited = set()
+        if sname in visited:
+            return False
+        visited.add(sname)
+        for fname, ftype in self.structs.get(sname, []):
+            if (sname, fname) in self.backref_fields:
+                return True  # backrefs imply graph structure
+            if ftype.endswith("*") and ftype[:-1] in self.serializable_structs:
+                return True
+            if ftype in self.serializable_structs:
+                if self._has_serializable_ptr_fields(ftype, visited):
+                    return True
+        return False
+
+    def _reachable_serializable_types(self, sname: str, visited=None) -> set:
+        """Return set of all @serializable type names reachable via ptr[T] from sname."""
+        if visited is None:
+            visited = set()
+        if sname in visited:
+            return visited
+        visited.add(sname)
+        for fname, ftype in self.structs.get(sname, []):
+            if ftype.endswith("*") and ftype[:-1] in self.serializable_structs:
+                self._reachable_serializable_types(ftype[:-1], visited)
+            elif ftype in self.serializable_structs:
+                self._reachable_serializable_types(ftype, visited)
+            elif ftype == "__array__":
+                et = self.struct_array_fields.get((sname, fname), "")
+                if et in self.serializable_structs:
+                    self._reachable_serializable_types(et, visited)
+        return visited
+
+    def _emit_graph_serialization(self):
+        """Emit _collect_graph_X, _serialize_graph_X, _deserialize_graph_X, save_X, load_X."""
+        # Find which structs need graph serialization
+        graph_structs = set()
+        for sname in self.serializable_structs:
+            if self._has_serializable_ptr_fields(sname):
+                graph_structs.add(sname)
+        if not graph_structs:
+            return
+
+        self.emit("/* ---- Graph serialization (save/load) ---- */")
+
+        # Forward declarations for all graph functions
+        all_types = set()
+        for sname in graph_structs:
+            all_types |= self._reachable_serializable_types(sname)
+        for sname in all_types:
+            self.emit(f"static void _collect_graph_{sname}({sname}* obj, MpPtrSet* seen);")
+            self.emit(f"static void _serialize_graph_{sname}(MpWriter* w, {sname}* v, MpPtrSet* seen);")
+            self.emit(f"static void _deserialize_graph_{sname}(MpReader* r, {sname}* v, void** objs);")
+        self.emit("")
+
+        # Emit _collect_graph_X for each type
+        for sname in all_types:
+            fields = self.structs.get(sname, [])
+            shash = self._struct_hash(sname, fields)
+            self.emit(f"static void _collect_graph_{sname}({sname}* obj, MpPtrSet* seen) {{")
+            self.indent += 1
+            self.emit(f"if (obj == NULL) return;")
+            self.emit(f"if (mp_ptrset_find(seen, obj) >= 0) return;")
+            # Recurse into ptr children FIRST (post-order: children before parent)
+            for fname, ftype in fields:
+                if (sname, fname) in self.backref_fields:
+                    continue  # skip backrefs during collect
+                if ftype.endswith("*") and ftype[:-1] in self.serializable_structs:
+                    base = ftype[:-1]
+                    self.emit(f"if (obj->{fname} != NULL) _collect_graph_{base}(obj->{fname}, seen);")
+                elif ftype in self.serializable_structs:
+                    # value field — recurse into its ptr children
+                    for _fn, _ft in self.structs.get(ftype, []):
+                        if _ft.endswith("*") and _ft[:-1] in self.serializable_structs:
+                            if (ftype, _fn) not in self.backref_fields:
+                                _base = _ft[:-1]
+                                self.emit(f"if (obj->{fname}.{_fn} != NULL) _collect_graph_{_base}(obj->{fname}.{_fn}, seen);")
+            # Add self AFTER children
+            self.emit(f"mp_ptrset_add(seen, obj, {shash}u);")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("")
+
+        # Emit _serialize_graph_X — like serialize_X but ptr fields → i32 index
+        for sname in all_types:
+            fields = self.structs.get(sname, [])
+            shash = self._struct_hash(sname, fields)
+            self.emit(f"static void _serialize_graph_{sname}(MpWriter* w, {sname}* v, MpPtrSet* seen) {{")
+            self.indent += 1
+            self.emit(f"mp_write_u32(w, {shash}u);")
+            for fname, ftype in fields:
+                if ftype.endswith("*") and ftype[:-1] in self.serializable_structs:
+                    # ptr field → write index
+                    self.emit(f"mp_write_i32(w, v->{fname} ? mp_ptrset_find(seen, v->{fname}) : -1);")
+                elif ftype in self._SCALAR_WRITE:
+                    self.emit(f"{self._SCALAR_WRITE[ftype]}(w, v->{fname});")
+                elif ftype == "MpStr*":
+                    self.emit(f"mp_write_str(w, v->{fname});")
+                elif ftype in self.serializable_structs:
+                    self.emit(f"_serialize_graph_{ftype}(w, &v->{fname}, seen);")
+                elif ftype == "__array__":
+                    et = self.struct_array_fields.get((sname, fname), "int64_t")
+                    sz = self.struct_array_sizes.get((sname, fname), "0")
+                    if et in self._SCALAR_WRITE:
+                        self.emit(f"mp_write_bytes(w, v->{fname}, sizeof({et}) * {sz});")
+                    elif et in self.serializable_structs:
+                        self.emit(f"for (int64_t _i = 0; _i < {sz}; _i++) {{ _serialize_graph_{et}(w, &v->{fname}[_i], seen); }}")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("")
+
+        # Emit _deserialize_graph_X — ptr fields → read i32 index, look up objs[]
+        for sname in all_types:
+            fields = self.structs.get(sname, [])
+            shash = self._struct_hash(sname, fields)
+            self.emit(f"static void _deserialize_graph_{sname}(MpReader* r, {sname}* v, void** objs) {{")
+            self.indent += 1
+            self.emit(f"uint32_t _hash = mp_read_u32(r);")
+            self.emit(f"if (_hash != {shash}u) {{ fprintf(stderr, \"deserialize graph {sname}: hash mismatch\\n\"); abort(); }}")
+            for fname, ftype in fields:
+                if ftype.endswith("*") and ftype[:-1] in self.serializable_structs:
+                    base = ftype[:-1]
+                    is_backref = (sname, fname) in self.backref_fields
+                    self.emit("{")
+                    self.indent += 1
+                    self.emit(f"int32_t _idx = mp_read_i32(r);")
+                    if is_backref:
+                        # Defer — will be set in second pass
+                        self.emit(f"v->{fname} = (_idx >= 0 && objs) ? ({base}*)objs[_idx] : NULL;")
+                    else:
+                        self.emit(f"v->{fname} = (_idx >= 0 && objs) ? ({base}*)objs[_idx] : NULL;")
+                    self.indent -= 1
+                    self.emit("}")
+                elif ftype in self._SCALAR_READ:
+                    self.emit(f"v->{fname} = {self._SCALAR_READ[ftype]}(r);")
+                elif ftype == "MpStr*":
+                    self.emit(f"v->{fname} = mp_read_str(r);")
+                elif ftype in self.serializable_structs:
+                    self.emit(f"_deserialize_graph_{ftype}(r, &v->{fname}, objs);")
+                elif ftype == "__array__":
+                    et = self.struct_array_fields.get((sname, fname), "int64_t")
+                    sz = self.struct_array_sizes.get((sname, fname), "0")
+                    if et in self._SCALAR_READ:
+                        self.emit(f"mp_read_bytes(r, v->{fname}, sizeof({et}) * {sz});")
+                    elif et in self.serializable_structs:
+                        self.emit(f"for (int64_t _i = 0; _i < {sz}; _i++) {{ _deserialize_graph_{et}(r, &v->{fname}[_i], objs); }}")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("")
+
+        # Emit save_X / load_X for root-level graph structs
+        for sname in graph_structs:
+            fields = self.structs.get(sname, [])
+            shash = self._struct_hash(sname, fields)
+            reachable = self._reachable_serializable_types(sname)
+
+            # save_X(path, root)
+            self.emit(f"static void save_{sname}(const char* path, {sname}* root) {{")
+            self.indent += 1
+            self.emit("MpPtrSet seen;")
+            self.emit("mp_ptrset_init(&seen, 32);")
+            self.emit(f"_collect_graph_{sname}(root, &seen);")
+            self.emit("")
+            self.emit("MpWriter* w = mp_writer_new(256);")
+            self.emit(f"mp_write_u32(w, 0x4D505947u);")  # magic "MPYG"
+            self.emit(f"mp_write_u32(w, {shash}u);")
+            self.emit("mp_write_i32(w, seen.count);")
+            self.emit("")
+            # Write type tag + serialized data for each object
+            self.emit("for (int32_t _i = 0; _i < seen.count; _i++) {")
+            self.indent += 1
+            self.emit("mp_write_u32(w, seen.types[_i]);")
+            # Type-dispatch serialization
+            first = True
+            for t in sorted(reachable):
+                t_fields = self.structs.get(t, [])
+                t_hash = self._struct_hash(t, t_fields)
+                kw = "if" if first else "else if"
+                self.emit(f"{kw} (seen.types[_i] == {t_hash}u) _serialize_graph_{t}(w, ({t}*)seen.ptrs[_i], &seen);")
+                first = False
+            self.indent -= 1
+            self.emit("}")
+            self.emit("")
+            self.emit("int64_t buf_len = 0;")
+            self.emit("uint8_t* buf = mp_writer_to_bytes(w, &buf_len);")
+            self.emit("mp_write_file_bin(path, buf, buf_len);")
+            self.emit("free(buf);")
+            self.emit("mp_writer_free(w);")
+            self.emit("mp_ptrset_free(&seen);")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("")
+
+            # load_X(path) → T*
+            self.emit(f"static {sname}* load_{sname}(const char* path) {{")
+            self.indent += 1
+            self.emit("int64_t buf_len;")
+            self.emit("uint8_t* buf = mp_read_file_bin(path, &buf_len);")
+            self.emit(f'if (!buf) {{ fprintf(stderr, "load_{sname}: cannot read %s\\n", path); abort(); }}')
+            self.emit("MpReader* r = mp_reader_new(buf, buf_len);")
+            self.emit(f"uint32_t magic = mp_read_u32(r);")
+            self.emit(f'if (magic != 0x4D505947u) {{ fprintf(stderr, "load_{sname}: bad magic\\n"); abort(); }}')
+            self.emit(f"uint32_t root_hash = mp_read_u32(r);")
+            self.emit(f'if (root_hash != {shash}u) {{ fprintf(stderr, "load_{sname}: type mismatch\\n"); abort(); }}')
+            self.emit("int32_t obj_count = mp_read_i32(r);")
+            self.emit("")
+            self.emit("void** objs = (void**)malloc(sizeof(void*) * obj_count);")
+            self.emit("uint32_t* types = (uint32_t*)malloc(sizeof(uint32_t) * obj_count);")
+            self.emit("")
+            # Read type tags and allocate
+            self.emit("for (int32_t _i = 0; _i < obj_count; _i++) {")
+            self.indent += 1
+            self.emit("types[_i] = mp_read_u32(r);")
+            first = True
+            for t in sorted(reachable):
+                t_fields = self.structs.get(t, [])
+                t_hash = self._struct_hash(t, t_fields)
+                kw = "if" if first else "else if"
+                self.emit(f"{kw} (types[_i] == {t_hash}u) {{")
+                self.indent += 1
+                self.emit(f"objs[_i] = malloc(sizeof({t}));")
+                self.emit(f"memset(objs[_i], 0, sizeof({t}));")
+                self.emit(f"_deserialize_graph_{t}(r, ({t}*)objs[_i], objs);")
+                self.indent -= 1
+                self.emit("}")
+                first = False
+            self.indent -= 1
+            self.emit("}")
+            self.emit("")
+            self.emit(f"{sname}* root = ({sname}*)objs[obj_count - 1];")
+            self.emit("free(objs);")
+            self.emit("free(types);")
+            self.emit("mp_reader_free(r);")
+            self.emit("free(buf);")
+            self.emit("return root;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("")
 
     def _emit_export_vtable(self):
         """Emit a vtable struct + get_api() for all @export-decorated functions."""
