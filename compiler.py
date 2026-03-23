@@ -1347,10 +1347,16 @@ class Compiler(StmtMixin, ExprMixin):
             if elem_t not in self.structs:
                 self.emit(gen_typed_list(elem_t, list_name))
 
-        # Emit enums
-        for node in ast.iter_child_nodes(tree):
-            if isinstance(node, ast.ClassDef) and node.name in self.enums:
-                self.compile_enum(node)
+        # For non-main modules, structs/enums/constants are in the .h header
+        # which is #included above. Only emit them in __main__ or in .c files
+        # that don't include their own header.
+        _is_module = module_name != "__main__"
+
+        if not _is_module:
+            # Emit enums
+            for node in ast.iter_child_nodes(tree):
+                if isinstance(node, ast.ClassDef) and node.name in self.enums:
+                    self.compile_enum(node)
 
         # Emit Result[T] types
         if self.result_types:
@@ -1361,29 +1367,37 @@ class Compiler(StmtMixin, ExprMixin):
             self._emit_tuple_ret_structs()
 
         # Emit constants — before structs so struct methods can reference them
+        # For modules, integer constants are #define'd in the header; only emit
+        # non-integer constants as `const` in the .c file.
         for name, ctype, value_node in mod_info.constants:
             if value_node:
                 val = self.compile_expr(value_node)
-                # If annotation was bare `const`, infer C type from value
                 if ctype == "const":
                     ctype = self.infer_type(value_node)
+                if _is_module and isinstance(value_node, ast.Constant) and isinstance(value_node.value, (int, float)):
+                    continue  # already #define'd in header
                 self.emit(f"const {ctype} {name} = {val};")
         if mod_info.constants:
             self.emit("")
 
-        # Forward typedefs first so self-referential pointer fields (e.g. Node* next)
-        # can reference the struct name inside the body, then full definitions so
-        # global array declarations like `Node list_nodes[N]` have the complete type.
+        if not _is_module:
+            # Forward typedefs first so self-referential pointer fields (e.g. Node* next)
+            # can reference the struct name inside the body, then full definitions so
+            # global array declarations like `Node list_nodes[N]` have the complete type.
+            for node in ast.iter_child_nodes(tree):
+                if isinstance(node, ast.ClassDef) and node.name in self.structs:
+                    decs = self.get_decorators(node)
+                    kw = "union" if "union" in decs else "struct"
+                    self.emit(f"typedef {kw} {node.name} {node.name};")
+            if self.structs:
+                self.emit("")
         for node in ast.iter_child_nodes(tree):
             if isinstance(node, ast.ClassDef) and node.name in self.structs:
-                decs = self.get_decorators(node)
-                kw = "union" if "union" in decs else "struct"
-                self.emit(f"typedef {kw} {node.name} {node.name};")
-        if self.structs:
-            self.emit("")
-        for node in ast.iter_child_nodes(tree):
-            if isinstance(node, ast.ClassDef) and node.name in self.structs:
-                self.compile_struct(node)
+                if _is_module:
+                    # Struct body is in the header; only compile methods
+                    self._compile_struct_methods_only(node)
+                else:
+                    self.compile_struct(node)
 
         # Emit @serializable serialize/deserialize functions
         if self.serializable_structs:
@@ -1501,6 +1515,10 @@ class Compiler(StmtMixin, ExprMixin):
             node = _fn_map[_fname]
             decs = self.get_decorators(node)
 
+            # Skip main() in dependency modules — only __main__ gets main()
+            if _fname == "main" and _is_module:
+                continue
+
             if "generic" in decs:
                 self._emit_generic(node, decs, module_name)
                 continue
@@ -1608,24 +1626,42 @@ class Compiler(StmtMixin, ExprMixin):
             self.emit_header(f"}} {ename};")
             self.emit_header("")
 
+        # Forward typedefs so structs can reference each other
+        for sname in mod_info.structs:
+            self.emit_header(f"typedef struct {sname} {sname};")
+
         for sname, sfields in mod_info.structs.items():
-            self.emit_header(f"typedef struct {{")
+            self.emit_header(f"struct {sname} {{")
             for fname, ftype in sfields:
                 self.emit_header(f"    {ftype} {fname};")
-            self.emit_header(f"}} {sname};")
+            self.emit_header(f"}};")
             self.emit_header("")
 
         prefix = f"{module_name}_" if module_name != "__main__" else ""
-        for fname, (ret, args) in mod_info.functions.items():
+        # Emit function prototypes using _make_prototype for const/restrict consistency
+        _fn_nodes = {n.name: n for n in ast.iter_child_nodes(tree)
+                     if isinstance(n, ast.FunctionDef)}
+        for fname in mod_info.functions:
             if fname in self._extern_funcs:
-                continue  # declared by the C header, not ours to re-declare
-            arg_str = ", ".join(f"{t} {n}" for n, t in args) if args else "void"
-            self.emit_header(f"{ret} {prefix}{fname}({arg_str});")
+                continue
+            fn_node = _fn_nodes.get(fname)
+            if fn_node:
+                proto = self._make_prototype(fn_node, module_name)
+                if proto:
+                    self.emit_header(f"{proto};")
+            else:
+                ret, args = mod_info.functions[fname]
+                arg_str = ", ".join(f"{t} {n}" for n, t in args) if args else "void"
+                self.emit_header(f"{ret} {prefix}{fname}({arg_str});")
 
         for name, ctype, value_node in mod_info.constants:
             if ctype == "const":
                 ctype = self.infer_type(value_node) if value_node else "int64_t"
-            self.emit_header(f"extern const {ctype} {name};")
+            # Emit as #define for integer constants (importers use the name directly)
+            if value_node and isinstance(value_node, ast.Constant) and isinstance(value_node.value, (int, float)):
+                self.emit_header(f"#define {name} {value_node.value}")
+            else:
+                self.emit_header(f"extern const {ctype} {name};")
 
         for name, ctype, annotation, value_node in mod_info.globals:
             if ctype == "__array__":
@@ -2607,6 +2643,85 @@ class Compiler(StmtMixin, ExprMixin):
             del self.lines[line_before:]
             for line in result.split("\n"):
                 self.lines.append(line)
+
+    def _compile_struct_methods_only(self, node: ast.ClassDef):
+        """For module .c files: struct body is in .h, only emit methods + constructor."""
+        import copy
+        decs = self.get_decorators(node)
+
+        # Collect fields for constructor helper
+        fields = []
+        for item in node.body:
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                ctype = map_type(item.annotation)
+                if ctype not in ("__array__", "__funcptr__", "__vec__", "__typed_list__",
+                                 "__bitfield__"):
+                    fields.append((item.target.id, ctype))
+
+        # Constructor helper
+        simple_fields = [(fn, ct) for fn, ct in fields if ct is not None]
+        arg_list = ", ".join(f"{ct} {fn}" for fn, ct in simple_fields)
+        self.emit(f"static inline {node.name} _mp_make_{node.name}({arg_list or 'void'}) {{")
+        self.indent += 1
+        self.emit(f"{node.name} _s = {{0}};")
+        for fn, ct in simple_fields:
+            self.emit(f"_s.{fn} = {fn};")
+        self.emit(f"return _s;")
+        self.indent -= 1
+        self.emit(f"}}")
+        self.emit("")
+
+        # Methods
+        methods = [item for item in node.body if isinstance(item, ast.FunctionDef)]
+        if not methods:
+            return
+        methods.sort(key=lambda m: (0 if m.name == "__init__" else 1, m.name))
+
+        ptr_annotation = ast.Subscript(
+            value=ast.Name(id="ptr", ctx=ast.Load()),
+            slice=ast.Name(id=node.name, ctx=ast.Load()),
+            ctx=ast.Load())
+
+        for item in methods:
+            synth = copy.deepcopy(item)
+            synth.name = f"{node.name}_{item.name}"
+            method_decs = self.get_decorators(item)
+            is_static = "staticmethod" in method_decs
+            if not is_static:
+                if synth.args.args and synth.args.args[0].arg == "self":
+                    synth.args.args[0].annotation = copy.deepcopy(ptr_annotation)
+                else:
+                    fwd_self = ast.arg(arg="self", annotation=copy.deepcopy(ptr_annotation))
+                    synth.args.args.insert(0, fwd_self)
+            self.compile_function(synth, self.current_module, prototype_only=True)
+        self.emit("")
+
+        for item in methods:
+            synth = copy.deepcopy(item)
+            synth.name = f"{node.name}_{item.name}"
+            method_decs = self.get_decorators(item)
+            is_static = "staticmethod" in method_decs
+            if not is_static:
+                if synth.args.args and synth.args.args[0].arg == "self":
+                    synth.args.args[0].annotation = copy.deepcopy(ptr_annotation)
+                else:
+                    self_arg = ast.arg(arg="self", annotation=copy.deepcopy(ptr_annotation))
+                    synth.args.args.insert(0, self_arg)
+            self.compile_function(synth, self.current_module)
+
+            if item.name == "__init__":
+                factory_args = [(map_type(a.annotation) if a.annotation else "int64_t", a.arg)
+                                for a in item.args.args if a.arg != "self"]
+                arg_decl = ", ".join(f"{t} {n}" for t, n in factory_args)
+                arg_call = ", ".join(n for _, n in factory_args)
+                self.emit(f"static inline {node.name} {node.name}_new({arg_decl or 'void'}) {{")
+                self.indent += 1
+                self.emit(f"{node.name} _self;")
+                self.emit(f"{node.name}___init__(&_self{', ' + arg_call if arg_call else ''});")
+                self.emit(f"return _self;")
+                self.indent -= 1
+                self.emit(f"}}")
+                self.emit("")
 
     def _make_prototype(self, node: ast.FunctionDef, module_name: str) -> str | None:
         """Build a C function prototype string (without trailing semicolon)."""

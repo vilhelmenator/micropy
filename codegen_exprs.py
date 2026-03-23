@@ -34,8 +34,17 @@ class ExprMixin:
         if isinstance(node, ast.Name):
             name = node.id
             if name in self.from_imports:
-                mod, func = self.from_imports[name]
-                return f"{mod}_{func}"
+                mod, orig = self.from_imports[name]
+                # Constants and struct types are #define'd or typedef'd in the
+                # header — use the original name directly (no module prefix).
+                mod_info = self.modules.get(mod)
+                if mod_info:
+                    _is_const = any(c[0] == orig for c in mod_info.constants)
+                    _is_struct = orig in mod_info.structs
+                    _is_enum = orig in mod_info.enums
+                    if _is_const or _is_struct or _is_enum:
+                        return orig
+                return f"{mod}_{orig}"
             if name == "True":
                 return "1"
             if name == "False":
@@ -433,6 +442,13 @@ class ExprMixin:
             if fname in cast_map:
                 return f"(({cast_map[fname]})({arg_str}))"
 
+            # Generic cast: cast(Type, value) → (ctype)(value)
+            if fname == "cast" and len(node.args) == 2:
+                from type_map import map_type as _mt
+                cast_type = _mt(node.args[0])
+                cast_val = self.compile_expr(node.args[1])
+                return f"(({cast_type})({cast_val}))"
+
             # addr_of(x) / ref(x) → &x
             if fname in ("addr_of", "ref"):
                 return f"(&{arg_str})"
@@ -634,6 +650,9 @@ class ExprMixin:
                 "arena_reset": "mp_arena_reset", "arena_alloc": "mp_arena_alloc",
                 "arena_list_new": "mp_arena_list_new",
                 "arena_str_new": "mp_arena_str_new",
+                "arena_str_new_len": "mp_arena_str_new_len",
+                "read_file_bin": "mp_read_file_bin",
+                "write_file_bin": "mp_write_file_bin",
                 "open": "mp_file_open",
                 "file_open": "mp_file_open", "file_open_safe": "mp_file_open_safe",
                 "file_close": "mp_file_close",
@@ -705,6 +724,11 @@ class ExprMixin:
                 if fname in mod_info.functions:
                     return f"{mod_name}_{fname}({arg_str})"
 
+            # For non-main modules, local functions are also prefixed
+            if self.current_module and self.current_module != "__main__":
+                cur_mod = self.modules.get(self.current_module)
+                if cur_mod and fname in cur_mod.functions:
+                    return f"{self.current_module}_{fname}({arg_str})"
             return f"{fname}({arg_str})"
 
         if isinstance(node.func, ast.Attribute):

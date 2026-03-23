@@ -108,6 +108,10 @@ def _ptr_is_written(body, param_name: str, func_param_types: dict = None) -> boo
                                     and not ptypes[0].startswith("const ")):
                                 return True
                 elif isinstance(node.func, ast.Name):
+                    # deref(param, val) → *param = val — always a write
+                    if node.func.id == "deref" and len(node.args) >= 1:
+                        if isinstance(node.args[0], ast.Name) and node.args[0].id == param_name:
+                            return True
                     # Free-function call: SomeFunc(param, ...) — check by position.
                     callee = node.func.id
                     ptypes = func_param_types.get(callee)

@@ -949,6 +949,15 @@ static inline MpStr* mp_arena_str_new(MpArena* a, const char* s) {
     return str;
 }
 
+static inline MpStr* mp_arena_str_new_len(MpArena* a, const char* s, int64_t len) {
+    MpStr* str = (MpStr*)mp_arena_alloc(a, sizeof(MpStr));
+    str->len = len;
+    str->data = (char*)mp_arena_alloc(a, len + 1);
+    memcpy(str->data, s, len);
+    str->data[len] = '\0';
+    return str;
+}
+
 /* Hot-reload helpers — load/unload shared libraries at runtime */
 #if !defined(_WIN32)
 #  include <dlfcn.h>
