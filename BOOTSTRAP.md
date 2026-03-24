@@ -45,7 +45,7 @@ Everything between those two steps moves to native code.
 
 ---
 
-## Phase 0 — Binary AST format
+## Phase 0 — Binary AST format ✅
 
 Define a compact binary encoding for Python AST nodes and write a Python-side
 serializer that walks `ast.Module` and writes it to an `MpWriter`-compatible
@@ -124,7 +124,7 @@ Validates the format before any native code is written.
 
 ---
 
-## Phase 1 — Native AST data structures
+## Phase 1 — Native AST data structures ✅
 
 Define the AST node structs in micropy. These mirror the Python `ast` module
 but use tagged unions and pointer-based children instead of Python objects.
@@ -222,7 +222,7 @@ comes from the arena — one free cleans up the entire tree.
 
 ---
 
-## Phase 2 — Symbol tables and compiler state
+## Phase 2 — Symbol tables and compiler state ✅
 
 Port the compiler's data structures from Python dicts/sets to micropy structs.
 This is the foundation that the analysis and codegen passes build on.
@@ -290,7 +290,7 @@ and avoids the Python list-of-strings → join overhead.
 
 ---
 
-## Phase 3 — Type mapping
+## Phase 3 — Type mapping ✅
 
 Port `type_map.py` (272 lines). This is the simplest module — pure functions
 with no mutation, no complex state.
@@ -479,17 +479,17 @@ fallback. Normal development uses the native compiler.
 
 ## Estimated sizes
 
-| Phase | What | Lines (est.) |
-|-------|------|-------------|
-| 0 | Binary AST format + Python serializer | ~400 |
-| 1 | Native AST structs + deserializer | ~400 |
-| 2 | Symbol tables + compiler state | ~200 |
-| 3 | Type mapping | ~300 |
-| 4 | Expression codegen | ~1,400 |
-| 5 | Statement codegen | ~2,500 |
-| 6 | Analysis passes | ~500 |
-| 7 | Top-level orchestration + glue | ~850 |
-| **Total** | | **~6,550** |
+| Phase | What | Est. | Actual |
+|-------|------|------|--------|
+| 0 | Binary AST format + Python serializer (`ast_serial.py`) | ~400 | 874 |
+| 1 | Native AST structs + deserializer (`ast_nodes.mpy`) | ~400 | 806 |
+| 2 | Symbol tables + compiler state (`strmap.mpy`) | ~200 | 373 |
+| 3 | Type mapping (`native_type_map.mpy`) | ~300 | 295 |
+| 4 | Expression codegen | ~1,400 | |
+| 5 | Statement codegen | ~2,500 | |
+| 6 | Analysis passes | ~500 | |
+| 7 | Top-level orchestration + glue | ~850 | |
+| **Total** | | **~6,550** | **2,348 so far** |
 
 Roughly 1:1 with the Python version (6,323 lines). The extra lines come from
 explicit string handling; the savings come from replacing `isinstance` chains
@@ -550,3 +550,22 @@ the Python path and the partial native path, compare results.
 The compiler step goes from the bottleneck to negligible. Total compile time
 becomes dominated by gcc, which is the correct steady state — your compiler
 should never be slower than the C compiler it feeds.
+
+---
+
+## Prerequisite compiler improvements (completed)
+
+The bootstrap work required several improvements to the micropy compiler itself:
+
+- **`cast(T, val)` generic builtin** — `cast(ptr[AstNode], expr)` emits `(AstNode*)(expr)`.
+  Replaces the limited `cast_int`/`cast_float` builtins for arbitrary type casts.
+- **`mp_arena_str_new_len`** — arena-allocated string from pointer + length (for binary data).
+- **`read_file_bin` / `write_file_bin`** — binary file I/O builtins mapped to runtime functions.
+- **Cross-module compilation fixes:**
+  - Header forward typedefs (`typedef struct X X;`) so structs can reference each other
+  - Integer constants exported as `#define` (not `extern const`) for cross-module use
+  - Non-main modules skip struct/enum re-emission in `.c` (comes from included `.h`)
+  - `main()` skipped in dependency modules
+  - Module-local function calls correctly prefixed with `module_name_`
+  - `deref(ptr, val)` recognized as a write (prevents false `const` on output parameters)
+  - Header prototypes use same `const`/`restrict` inference as `.c` definitions
