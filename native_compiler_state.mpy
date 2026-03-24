@@ -10,7 +10,7 @@ from strmap import strset_new, strset_free, strset_has, strset_add
 
 # ── Compiler state ──────────────────────────────────────────────────────
 
-struct CompilerState:
+class CompilerState:
     # Output buffer
     lines: ptr[MpWriter]
     header: ptr[MpWriter]
@@ -61,27 +61,27 @@ struct CompilerState:
 
 # ── Helper structs for compound values in maps ─────────────────────────
 
-struct FieldEntry:
+class FieldEntry:
     name: str
     ctype: str
 
-struct FieldList:
+class FieldList:
     entries: ptr[FieldEntry]
     count: i32
 
-struct ArrayInfo:
+class ArrayInfo:
     elem_type: str
     size: str
 
-struct ImportInfo:
+class ImportInfo:
     module: str
     orig_name: str
 
-struct ParamTypeList:
+class ParamTypeList:
     types: ptr[str]
     count: i32
 
-struct ParamNameList:
+class ParamNameList:
     names: ptr[str]
     count: i32
 

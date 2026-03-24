@@ -542,17 +542,21 @@ class ExprMixin:
             if fname in builtins:
                 return f"{builtins[fname]}({arg_str})"
 
+            # For non-main modules, check local functions FIRST (before
+            # cross-module search) so same-named helpers like _emit resolve
+            # to the current module's version, not another module's.
+            if self.current_module and self.current_module != "__main__":
+                cur_mod = self.modules.get(self.current_module)
+                if cur_mod and fname in cur_mod.functions:
+                    return f"{self.current_module}_{fname}({arg_str})"
+                if fname in self._all_func_defs:
+                    return f"{self.current_module}_{fname}({arg_str})"
+
             for mod_name, mod_info in self.modules.items():
                 if mod_name == self.current_module:
                     continue
                 if fname in mod_info.functions:
                     return f"{mod_name}_{fname}({arg_str})"
-
-            # For non-main modules, local functions are also prefixed
-            if self.current_module and self.current_module != "__main__":
-                cur_mod = self.modules.get(self.current_module)
-                if cur_mod and fname in cur_mod.functions:
-                    return f"{self.current_module}_{fname}({arg_str})"
             return f"{fname}({arg_str})"
 
         if isinstance(node.func, ast.Attribute):

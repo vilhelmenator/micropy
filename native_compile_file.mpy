@@ -1,0 +1,308 @@
+"""Native port of compile_file — top-level orchestration.
+
+Phase 7: Takes a deserialized AST tree (AstNode*) and produces C source.
+This is the entry point called from Python via ctypes.
+
+Simplified for initial bootstrap — handles the core compilation path:
+1. First pass: collect functions, structs, constants, globals
+2. Run analysis passes (cold inference, alloc tags)
+3. Emit C sections: includes, constants, forward decls, structs, functions
+4. Return C source as a string
+"""
+
+from micropy import alloc, free
+from ast_nodes import AstNode, AstNodeList, AstName, AstConstant, AstCall
+from ast_nodes import AstModule, AstFunctionDef, AstClassDef, AstAnnAssign
+from ast_nodes import AstAssign, AstAttribute, AstExprStmt, AstArg, AstArguments
+from ast_nodes import TAG_MODULE, TAG_FUNCTION_DEF, TAG_CLASS_DEF, TAG_ANN_ASSIGN
+from ast_nodes import TAG_ASSIGN, TAG_EXPR_STMT, TAG_NAME, TAG_CALL, TAG_ATTRIBUTE
+from ast_nodes import deserialize_ast
+from strmap import StrMap, StrSet, strmap_new, strmap_free, strmap_get, strmap_set, strmap_has
+from strmap import strset_new, strset_add, strset_has
+from native_compiler_state import CompilerState, FieldList, FieldEntry, field_list_new
+from native_compiler_state import compiler_state_new
+from native_type_map import native_map_type
+from native_infer import native_infer_type
+from native_codegen_expr import native_compile_expr
+from native_codegen_call import native_compile_call
+from native_codegen_stmt import native_compile_stmt
+from native_analysis import native_infer_cold_from_body, native_build_alloc_tags
+
+# ── Emit helper ─────────────────────────────────────────────────────────
+
+def _emit(s: ptr[CompilerState], line: str) -> void:
+    for i in range(s.indent):
+        mp_write_str(s.lines, str_new("    "))
+    mp_write_str(s.lines, line)
+    mp_write_str(s.lines, str_new("\n"))
+
+def _emit_raw(s: ptr[CompilerState], line: str) -> void:
+    """Emit without indentation."""
+    mp_write_str(s.lines, line)
+    mp_write_str(s.lines, str_new("\n"))
+
+# ── First pass: collect declarations ────────────────────────────────────
+
+def _first_pass(s: ptr[CompilerState], body: AstNodeList) -> void:
+    """Walk top-level nodes, register functions, structs, constants, globals."""
+    for i in range(body.count):
+        node: ptr[AstNode] = body.items[i]
+        if node is None:
+            continue
+
+        # Function definitions
+        if node.tag == TAG_FUNCTION_DEF:
+            fd: ptr[AstFunctionDef] = node.data
+            # Map return type
+            ret_type: str = native_map_type(fd.returns)
+            strmap_set(addr_of(s.func_ret_types), fd.name, ret_type)
+            continue
+
+        # Class definitions (structs)
+        if node.tag == TAG_CLASS_DEF:
+            cd: ptr[AstClassDef] = node.data
+            # Collect fields
+            field_count: i32 = 0
+            for j in range(cd.body.count):
+                item: ptr[AstNode] = cd.body.items[j]
+                if item is not None and item.tag == TAG_ANN_ASSIGN:
+                    field_count = field_count + 1
+            if field_count > 0:
+                fl: ptr[FieldList] = field_list_new(field_count)
+                idx: i32 = 0
+                for j in range(cd.body.count):
+                    item2: ptr[AstNode] = cd.body.items[j]
+                    if item2 is not None and item2.tag == TAG_ANN_ASSIGN:
+                        aa: ptr[AstAnnAssign] = item2.data
+                        if aa.target is not None and aa.target.tag == TAG_NAME:
+                            fn: ptr[AstName] = aa.target.data
+                            ft: str = native_map_type(aa.annotation)
+                            fl.entries[idx].name = fn.id
+                            fl.entries[idx].ctype = ft
+                            idx = idx + 1
+                strmap_set(addr_of(s.structs), cd.name, fl)
+            # Register struct methods
+            for j in range(cd.body.count):
+                item3: ptr[AstNode] = cd.body.items[j]
+                if item3 is not None and item3.tag == TAG_FUNCTION_DEF:
+                    md: ptr[AstFunctionDef] = item3.data
+                    mret: str = native_map_type(md.returns)
+                    mname: str = str_concat(str_concat(cd.name, str_new("_")), md.name)
+                    strmap_set(addr_of(s.func_ret_types), mname, mret)
+            continue
+
+        # Annotated assignments (constants and globals)
+        if node.tag == TAG_ANN_ASSIGN:
+            aa2: ptr[AstAnnAssign] = node.data
+            if aa2.target is not None and aa2.target.tag == TAG_NAME:
+                vn: ptr[AstName] = aa2.target.data
+                ct: str = native_map_type(aa2.annotation)
+                # Uppercase names → constants
+                is_upper: int = 1
+                name_len: i64 = str_len(vn.id)
+                for k in range(name_len):
+                    ch: u8 = cast(u8, vn.id.data[k])
+                    if ch >= 97 and ch <= 122:
+                        is_upper = 0
+                if is_upper and name_len > 0:
+                    strmap_set(addr_of(s.constants), vn.id, ct)
+                else:
+                    strmap_set(addr_of(s.mutable_globals), vn.id, ct)
+            continue
+
+# ── Emit C code sections ────────────────────────────────────────────────
+
+def _emit_includes(s: ptr[CompilerState]) -> void:
+    _emit_raw(s, str_new("#include \"micropy_rt.h\""))
+    _emit_raw(s, str_new(""))
+
+def _emit_forward_typedefs(s: ptr[CompilerState], body: AstNodeList) -> void:
+    """Emit typedef struct X X; for each struct."""
+    for i in range(body.count):
+        node: ptr[AstNode] = body.items[i]
+        if node is not None and node.tag == TAG_CLASS_DEF:
+            cd: ptr[AstClassDef] = node.data
+            if strmap_has(addr_of(s.structs), cd.name):
+                _emit_raw(s, str_format("typedef struct %s %s;", cd.name.data, cd.name.data))
+    _emit_raw(s, str_new(""))
+
+def _emit_struct_defs(s: ptr[CompilerState], body: AstNodeList) -> void:
+    """Emit struct body definitions."""
+    for i in range(body.count):
+        node: ptr[AstNode] = body.items[i]
+        if node is None or node.tag != TAG_CLASS_DEF:
+            continue
+        cd: ptr[AstClassDef] = node.data
+        fl: ptr[FieldList] = strmap_get(addr_of(s.structs), cd.name)
+        if fl is None:
+            continue
+        _emit_raw(s, str_format("typedef struct %s {", cd.name.data))
+        for j in range(fl.count):
+            _emit_raw(s, str_format("    %s %s;", fl.entries[j].ctype.data, fl.entries[j].name.data))
+        _emit_raw(s, str_format("} %s;", cd.name.data))
+        _emit_raw(s, str_new(""))
+
+def _emit_constants(s: ptr[CompilerState], body: AstNodeList) -> void:
+    """Emit const declarations for uppercase names."""
+    for i in range(body.count):
+        node: ptr[AstNode] = body.items[i]
+        if node is None or node.tag != TAG_ANN_ASSIGN:
+            continue
+        aa: ptr[AstAnnAssign] = node.data
+        if aa.target is None or aa.target.tag != TAG_NAME:
+            continue
+        vn: ptr[AstName] = aa.target.data
+        if strmap_has(addr_of(s.constants), vn.id):
+            ct: str = strmap_get(addr_of(s.constants), vn.id)
+            if aa.value is not None:
+                val: str = native_compile_expr(s, aa.value)
+                _emit_raw(s, str_format("const %s %s = %s;", ct.data, vn.id.data, val.data))
+
+def _emit_globals(s: ptr[CompilerState], body: AstNodeList) -> void:
+    """Emit mutable global variable declarations."""
+    for i in range(body.count):
+        node: ptr[AstNode] = body.items[i]
+        if node is None or node.tag != TAG_ANN_ASSIGN:
+            continue
+        aa: ptr[AstAnnAssign] = node.data
+        if aa.target is None or aa.target.tag != TAG_NAME:
+            continue
+        vn: ptr[AstName] = aa.target.data
+        if strmap_has(addr_of(s.mutable_globals), vn.id):
+            ct: str = strmap_get(addr_of(s.mutable_globals), vn.id)
+            if aa.value is not None:
+                val: str = native_compile_expr(s, aa.value)
+                _emit_raw(s, str_format("%s %s = %s;", ct.data, vn.id.data, val.data))
+            else:
+                _emit_raw(s, str_format("%s %s;", ct.data, vn.id.data))
+
+def _emit_function_prototypes(s: ptr[CompilerState], body: AstNodeList) -> void:
+    """Emit forward declarations for all functions."""
+    for i in range(body.count):
+        node: ptr[AstNode] = body.items[i]
+        if node is None or node.tag != TAG_FUNCTION_DEF:
+            continue
+        fd: ptr[AstFunctionDef] = node.data
+        ret: str = native_map_type(fd.returns)
+        # Build arg string
+        args_node: ptr[AstArguments] = fd.args.data
+        arg_str: str = str_new("")
+        for j in range(args_node.args.count):
+            arg: ptr[AstArg] = args_node.args.items[j].data
+            atype: str = native_map_type(arg.annotation)
+            if j > 0:
+                arg_str = str_concat(arg_str, str_new(", "))
+            arg_str = str_concat(arg_str, str_format("%s %s", atype.data, arg.name.data))
+        if args_node.args.count == 0:
+            arg_str = str_new("void")
+        _emit_raw(s, str_format("%s %s(%s);", ret.data, fd.name.data, arg_str.data))
+    _emit_raw(s, str_new(""))
+
+def _emit_functions(s: ptr[CompilerState], body: AstNodeList) -> void:
+    """Compile and emit all function definitions."""
+    for i in range(body.count):
+        node: ptr[AstNode] = body.items[i]
+        if node is None or node.tag != TAG_FUNCTION_DEF:
+            continue
+        fd: ptr[AstFunctionDef] = node.data
+        ret: str = native_map_type(fd.returns)
+        # Build arg string and register in local scope
+        args_node: ptr[AstArguments] = fd.args.data
+        arg_str: str = str_new("")
+        # Clear local vars for this function
+        strmap_free(addr_of(s.local_vars))
+        s.local_vars = strmap_new(32)
+        strmap_free(addr_of(s.func_args))
+        s.func_args = strmap_new(16)
+
+        for j in range(args_node.args.count):
+            arg: ptr[AstArg] = args_node.args.items[j].data
+            atype: str = native_map_type(arg.annotation)
+            if j > 0:
+                arg_str = str_concat(arg_str, str_new(", "))
+            arg_str = str_concat(arg_str, str_format("%s %s", atype.data, arg.name.data))
+            strmap_set(addr_of(s.func_args), arg.name, atype)
+        if args_node.args.count == 0:
+            arg_str = str_new("void")
+
+        s.current_func_ret_type = ret
+
+        # Emit function signature
+        if str_eq(fd.name, str_new("main")):
+            _emit_raw(s, str_new("int main(void) {"))
+        else:
+            _emit_raw(s, str_format("%s %s(%s) {", ret.data, fd.name.data, arg_str.data))
+        s.indent = 1
+
+        # Compile body
+        for j in range(fd.body.count):
+            native_compile_stmt(s, fd.body.items[j])
+
+        s.indent = 0
+        _emit_raw(s, str_new("}"))
+        _emit_raw(s, str_new(""))
+
+def _emit_runtime_impl(s: ptr[CompilerState]) -> void:
+    """Emit the runtime implementation include at the end."""
+    _emit_raw(s, str_new(""))
+    _emit_raw(s, str_new("#define MICROPY_RT_IMPL"))
+    _emit_raw(s, str_new("#include \"micropy_rt.h\""))
+
+# ── Main entry point ────────────────────────────────────────────────────
+
+def native_compile(ast_buf: ptr[u8], ast_len: i64,
+                   out_buf: ptr[ptr[u8]], out_len: ptr[i64]) -> i32:
+    """Compile a serialized AST to C source code.
+
+    Args:
+        ast_buf: Binary AST buffer (from ast_serial.py)
+        ast_len: Length of the buffer
+        out_buf: Output pointer — set to malloc'd C source string
+        out_len: Output length
+
+    Returns: 0 on success, -1 on error.
+    """
+    # Deserialize AST
+    root: ptr[AstNode] = deserialize_ast(ast_buf, ast_len)
+    if root is None:
+        return -2
+    if root.tag != TAG_MODULE:
+        return cast_int(root.tag)  # return actual tag as error code for debugging
+
+
+    mod: ptr[AstModule] = root.data
+
+    # Initialize compiler state
+    s: CompilerState = compiler_state_new()
+
+    # First pass: collect declarations
+    _first_pass(addr_of(s), mod.body)
+
+    # Analysis passes
+    native_infer_cold_from_body(addr_of(s), mod.body)
+    native_build_alloc_tags(addr_of(s), mod.body)
+
+    # Emit C code
+    _emit_includes(addr_of(s))
+    _emit_forward_typedefs(addr_of(s), mod.body)
+    _emit_struct_defs(addr_of(s), mod.body)
+    _emit_constants(addr_of(s), mod.body)
+    _emit_globals(addr_of(s), mod.body)
+    _emit_function_prototypes(addr_of(s), mod.body)
+    _emit_functions(addr_of(s), mod.body)
+    _emit_runtime_impl(addr_of(s))
+
+    # Extract C source from writer
+    result_len: i64 = 0
+    result_buf: ptr[u8] = writer_to_bytes(s.lines, addr_of(result_len))
+    deref(out_buf, result_buf)
+    deref(out_len, result_len)
+
+    return 0
+
+# ── Standalone test ─────────────────────────────────────────────────────
+
+def main() -> int:
+    ok: str = "PASS: native_compile_file (phase 7)"
+    print(ok)
+    return 0

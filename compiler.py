@@ -1332,6 +1332,16 @@ class Compiler(StmtMixin, ExprMixin):
                 self.emit(f'#include "{imp}.h"')
         self.emit("")
 
+        # Module-level c_code() — forward declarations, extern prototypes, etc.
+        for node in ast.iter_child_nodes(tree):
+            if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Name)
+                    and node.value.func.id == "c_code"
+                    and node.value.args
+                    and isinstance(node.value.args[0], ast.Constant)):
+                for line in node.value.args[0].value.strip().split("\n"):
+                    self.emit(line.strip())
+
         # Debug mode: define the shared alloc counter and register exit check
         if self.debug_mode and module_name == "__main__":
             self.emit("#ifdef MICROPY_DEBUG")
@@ -1416,9 +1426,20 @@ class Compiler(StmtMixin, ExprMixin):
                     self._soa_vars[name] = (elem_type, str(size), _soa_fields)
                 elif value_node:
                     val = self.compile_expr(value_node)
-                    self.emit(f"{elem_type} {name}[{size}] = {val};")
+                    if size is None:
+                        if isinstance(value_node, ast.List):
+                            n = len(value_node.elts)
+                            self.emit(f"{elem_type} {name}[{n}] = {val};")
+                        else:
+                            self.emit(f"{elem_type} {name}[] = {val};")
+                    else:
+                        self.emit(f"{elem_type} {name}[{size}] = {val};")
                 else:
-                    self.emit(f"{elem_type} {name}[{size}] = {{0}};")
+                    if size is None:
+                        print(f"Warning: global array[{elem_type}] '{name}' without size requires an initializer",
+                              file=sys.stderr)
+                    else:
+                        self.emit(f"{elem_type} {name}[{size}] = {{0}};")
             elif ctype == "__funcptr__":
                 info = get_funcptr_info(annotation)
                 if info:
@@ -1578,6 +1599,9 @@ class Compiler(StmtMixin, ExprMixin):
                 if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call):
                     if isinstance(n.value.func, ast.Name) and n.value.func.id == "c_include":
                         continue
+                    # c_code() at module level — skip here, emitted earlier with includes
+                    if isinstance(n.value.func, ast.Name) and n.value.func.id == "c_code":
+                        continue
                 # Skip type alias assignments (already handled in first pass)
                 if isinstance(n, ast.Assign):
                     if len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
@@ -1672,7 +1696,8 @@ class Compiler(StmtMixin, ExprMixin):
                     for _fn, _ft in _soa_fields:
                         self.emit_header(f"extern {_ft} {name}_{_fn}[{size}];")
                 else:
-                    self.emit_header(f"extern {elem_type} {name}[{size}];")
+                    size_str = str(size) if size is not None else ""
+                    self.emit_header(f"extern {elem_type} {name}[{size_str}];")
             elif ctype != "__funcptr__":
                 self.emit_header(f"extern {ctype} {name};")
 
@@ -2357,10 +2382,12 @@ class Compiler(StmtMixin, ExprMixin):
 
         for arg in node.args.args:
             atype = map_type(arg.annotation)
+            _MUTABLE_RT = ("MpReader*", "MpWriter*", "MpArena*", "CompilerState*")
             const_prefix = ""
             if (atype.endswith("*")
                     and not atype.startswith("const ")
                     and atype != "void*"
+                    and atype not in _MUTABLE_RT
                     and arg.arg != "self"
                     and not _ptr_is_written(node.body, arg.arg)):
                 const_prefix = "const "
@@ -2476,9 +2503,11 @@ class Compiler(StmtMixin, ExprMixin):
         self.emit(f"}}")
         self.emit("")
 
+        _MUTABLE_RT = ("MpReader*", "MpWriter*", "MpArena*", "CompilerState*")
         def _const_arg(aname, atype):
             if (atype.endswith("*") and not atype.startswith("const ")
-                    and atype != "void*" and aname != "self"
+                    and atype != "void*" and atype not in _MUTABLE_RT
+                    and aname != "self"
                     and not _ptr_is_written(node.body, aname)):
                 return f"const {atype} {aname}"
             return f"{atype} {aname}"
@@ -2581,6 +2610,9 @@ class Compiler(StmtMixin, ExprMixin):
             modules=self.modules,
             source_dir=self.source_dir,
             platform=self.platform,
+            structs=dict(self.structs),
+            enums=dict(self.enums),
+            func_ret_types=dict(self.func_ret_types),
         )
         c_src, h_src, mod_info = dep_compiler.compile_file(dep_path, mod_name)
         self.modules[mod_name] = mod_info
@@ -2740,10 +2772,12 @@ class Compiler(StmtMixin, ExprMixin):
                     fp_arg_str = ", ".join(fp_args) if fp_args else "void"
                     args.append((arg.arg, f"{r} (*{arg.arg})({fp_arg_str})"))
                     continue
+            _MUTABLE_RT = ("MpReader*", "MpWriter*", "MpArena*", "CompilerState*")
             const_prefix = ""
             if (atype.endswith("*")
                     and not atype.startswith("const ")
                     and atype != "void*"
+                    and atype not in _MUTABLE_RT
                     and arg.arg != "self"
                     and not _ptr_is_written(node.body, arg.arg, self.func_param_types)):
                 const_prefix = "const "

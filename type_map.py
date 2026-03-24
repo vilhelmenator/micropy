@@ -207,6 +207,10 @@ def get_array_info(annotation, type_map=None):
             else:
                 size = None
             return elem_type, size
+        # array[T] without size — inferred from initializer
+        if not isinstance(sl, ast.Tuple):
+            elem_type = map_type(sl, type_map)
+            return elem_type, None
     return "int64_t", 0
 
 

@@ -675,10 +675,14 @@ class StmtMixin:
                     continue
             # Read-only inference: ptr param never written through → const T*
             # Applied to both prototype and definition so they stay in sync.
+            # Types whose fields are mutated through opaque runtime function calls —
+            # the read-only inference can't see through these, so never mark const.
+            _MUTABLE_RT_TYPES = ("MpReader*", "MpWriter*", "MpArena*", "CompilerState*")
             const_prefix = ""
             if (atype.endswith("*")
                     and not atype.startswith("const ")
                     and atype != "void*"
+                    and atype not in _MUTABLE_RT_TYPES
                     and arg.arg != "self"
                     and not _ptr_is_written(node.body, arg.arg, self.func_param_types)):
                 const_prefix = "const "
@@ -1129,16 +1133,36 @@ class StmtMixin:
                     self.emit(f"{_ft} {name}_{_fn}[{size}];")
                 self._soa_vars[name] = (elem_type, str(size), _soa_fields)
                 return
-            self._array_vars[name] = (elem_type, str(size))
             if node.value:
                 # Check if this is a compile_time call (already emitted by _emit_compile_time)
                 if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
                     called = node.value.func.id
                     if called in self._compile_time_funcs:
+                        if size is not None:
+                            self._array_vars[name] = (elem_type, str(size))
                         return
                 val = self.compile_expr(node.value)
-                self.emit(f"{elem_type} {name}[{size}] = {val};")
+                if size is None:
+                    # Infer size from initializer — count elements in the list
+                    if isinstance(node.value, ast.List):
+                        n = len(node.value.elts)
+                        self._array_vars[name] = (elem_type, str(n))
+                        self.emit(f"{elem_type} {name}[{n}] = {val};")
+                    else:
+                        # Let C compiler infer: T name[] = {...}
+                        self._array_vars[name] = (elem_type, "0")
+                        self.emit(f"{elem_type} {name}[] = {val};")
+                else:
+                    self._array_vars[name] = (elem_type, str(size))
+                    self.emit(f"{elem_type} {name}[{size}] = {val};")
             else:
+                if size is None:
+                    import sys
+                    print(f"{self._current_file}:{getattr(node, 'lineno', '?')}: "
+                          f"error: array[{elem_type}] without size requires an initializer",
+                          file=sys.stderr)
+                    return
+                self._array_vars[name] = (elem_type, str(size))
                 self.emit(f"{elem_type} {name}[{size}] = {{0}};")
             return
 

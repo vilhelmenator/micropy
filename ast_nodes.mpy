@@ -337,7 +337,7 @@ def ast_read_node(r: ptr[MpReader], arena: ptr[MpArena]) -> ptr[AstNode]:
     tag: u8 = mp_read_u8(r)
     lineno: u16 = mp_read_u16(r)
 
-    node: ptr[AstNode] = arena_alloc(arena, 16)
+    node: ptr[AstNode] = arena_alloc(arena, sizeof(AstNode))
     node.tag = tag
     node.lineno = lineno
     node.data = None
@@ -440,12 +440,12 @@ def ast_read_op_field(r: ptr[MpReader]) -> u8:
 # ── Per-node-type readers ───────────────────────────────────────────────
 
 def ast_read_module(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstModule] = arena_alloc(arena, 16)
+    p: ptr[AstModule] = arena_alloc(arena, sizeof(AstModule))
     p.body = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_function_def(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstFunctionDef] = arena_alloc(arena, 48)
+    p: ptr[AstFunctionDef] = arena_alloc(arena, sizeof(AstFunctionDef))
     p.name = ast_read_string_field(r, arena)
     p.args = ast_read_node(r, arena)
     p.body = ast_read_node_list(r, arena)
@@ -454,7 +454,7 @@ def ast_read_function_def(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNo
     node.data = p
 
 def ast_read_class_def(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstClassDef] = arena_alloc(arena, 56)
+    p: ptr[AstClassDef] = arena_alloc(arena, sizeof(AstClassDef))
     p.name = ast_read_string_field(r, arena)
     p.bases = ast_read_node_list(r, arena)
     p.keywords = ast_read_node_list(r, arena)
@@ -463,91 +463,91 @@ def ast_read_class_def(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]
     node.data = p
 
 def ast_read_return(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstReturn] = arena_alloc(arena, 8)
+    p: ptr[AstReturn] = arena_alloc(arena, sizeof(AstReturn))
     p.value = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_raise(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstRaise] = arena_alloc(arena, 8)
+    p: ptr[AstRaise] = arena_alloc(arena, sizeof(AstRaise))
     p.exc = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_expr_stmt(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstExprStmt] = arena_alloc(arena, 8)
+    p: ptr[AstExprStmt] = arena_alloc(arena, sizeof(AstExprStmt))
     p.value = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_if(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstIf] = arena_alloc(arena, 40)
+    p: ptr[AstIf] = arena_alloc(arena, sizeof(AstIf))
     p.test = ast_read_node_field(r, arena)
     p.body = ast_read_node_list(r, arena)
     p.orelse = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_while(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstWhile] = arena_alloc(arena, 24)
+    p: ptr[AstWhile] = arena_alloc(arena, sizeof(AstWhile))
     p.test = ast_read_node_field(r, arena)
     p.body = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_for(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstFor] = arena_alloc(arena, 32)
+    p: ptr[AstFor] = arena_alloc(arena, sizeof(AstFor))
     p.target = ast_read_node_field(r, arena)
     p.iter = ast_read_node_field(r, arena)
     p.body = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_with(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstWith] = arena_alloc(arena, 32)
+    p: ptr[AstWith] = arena_alloc(arena, sizeof(AstWith))
     p.items = ast_read_node_list(r, arena)
     p.body = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_assign(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstAssign] = arena_alloc(arena, 24)
+    p: ptr[AstAssign] = arena_alloc(arena, sizeof(AstAssign))
     p.targets = ast_read_node_list(r, arena)
     p.value = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_aug_assign(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstAugAssign] = arena_alloc(arena, 24)
+    p: ptr[AstAugAssign] = arena_alloc(arena, sizeof(AstAugAssign))
     p.target = ast_read_node_field(r, arena)
     p.op = ast_read_op_field(r)
     p.value = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_ann_assign(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstAnnAssign] = arena_alloc(arena, 24)
+    p: ptr[AstAnnAssign] = arena_alloc(arena, sizeof(AstAnnAssign))
     p.target = ast_read_node_field(r, arena)
     p.annotation = ast_read_node_field(r, arena)
     p.value = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_assert(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstAssert] = arena_alloc(arena, 16)
+    p: ptr[AstAssert] = arena_alloc(arena, sizeof(AstAssert))
     p.test = ast_read_node_field(r, arena)
     p.msg = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_import(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstImport] = arena_alloc(arena, 16)
+    p: ptr[AstImport] = arena_alloc(arena, sizeof(AstImport))
     p.names = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_import_from(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstImportFrom] = arena_alloc(arena, 24)
+    p: ptr[AstImportFrom] = arena_alloc(arena, sizeof(AstImportFrom))
     p.module = ast_read_string_field(r, arena)
     p.names = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_match(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstMatch] = arena_alloc(arena, 24)
+    p: ptr[AstMatch] = arena_alloc(arena, sizeof(AstMatch))
     p.subject = ast_read_node_field(r, arena)
     p.cases = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_constant(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstConstant] = arena_alloc(arena, 32)
+    p: ptr[AstConstant] = arena_alloc(arena, sizeof(AstConstant))
     p.kind = mp_read_u8(r)
     p.int_val = 0
     p.float_val = 0.0
@@ -568,50 +568,50 @@ def ast_read_constant(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode])
     node.data = p
 
 def ast_read_name(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstName] = arena_alloc(arena, 8)
+    p: ptr[AstName] = arena_alloc(arena, sizeof(AstName))
     p.id = ast_read_string_field(r, arena)
     node.data = p
 
 def ast_read_call(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstCall] = arena_alloc(arena, 40)
+    p: ptr[AstCall] = arena_alloc(arena, sizeof(AstCall))
     p.func = ast_read_node_field(r, arena)
     p.args = ast_read_node_list(r, arena)
     p.keywords = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_attribute(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstAttribute] = arena_alloc(arena, 16)
+    p: ptr[AstAttribute] = arena_alloc(arena, sizeof(AstAttribute))
     p.value = ast_read_node_field(r, arena)
     p.attr = ast_read_string_field(r, arena)
     node.data = p
 
 def ast_read_subscript(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstSubscript] = arena_alloc(arena, 16)
+    p: ptr[AstSubscript] = arena_alloc(arena, sizeof(AstSubscript))
     p.value = ast_read_node_field(r, arena)
     p.slice = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_binop(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstBinOp] = arena_alloc(arena, 24)
+    p: ptr[AstBinOp] = arena_alloc(arena, sizeof(AstBinOp))
     p.left = ast_read_node_field(r, arena)
     p.op = ast_read_op_field(r)
     p.right = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_unaryop(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstUnaryOp] = arena_alloc(arena, 16)
+    p: ptr[AstUnaryOp] = arena_alloc(arena, sizeof(AstUnaryOp))
     p.op = ast_read_op_field(r)
     p.operand = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_boolop(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstBoolOp] = arena_alloc(arena, 24)
+    p: ptr[AstBoolOp] = arena_alloc(arena, sizeof(AstBoolOp))
     p.op = ast_read_op_field(r)
     p.values = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_compare(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstCompare] = arena_alloc(arena, 32)
+    p: ptr[AstCompare] = arena_alloc(arena, sizeof(AstCompare))
     p.left = ast_read_node_field(r, arena)
     op_count: u8 = mp_read_u8(r)
     p.op_count = cast_int(op_count)
@@ -622,114 +622,114 @@ def ast_read_compare(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) 
     node.data = p
 
 def ast_read_ifexp(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstIfExp] = arena_alloc(arena, 24)
+    p: ptr[AstIfExp] = arena_alloc(arena, sizeof(AstIfExp))
     p.test = ast_read_node_field(r, arena)
     p.body = ast_read_node_field(r, arena)
     p.orelse = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_tuple(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstTuple] = arena_alloc(arena, 16)
+    p: ptr[AstTuple] = arena_alloc(arena, sizeof(AstTuple))
     p.elts = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_list(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstList] = arena_alloc(arena, 16)
+    p: ptr[AstList] = arena_alloc(arena, sizeof(AstList))
     p.elts = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_set(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstSet] = arena_alloc(arena, 16)
+    p: ptr[AstSet] = arena_alloc(arena, sizeof(AstSet))
     p.elts = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_dict(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstDict] = arena_alloc(arena, 32)
+    p: ptr[AstDict] = arena_alloc(arena, sizeof(AstDict))
     p.keys = ast_read_node_list(r, arena)
     p.values = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_joined_str(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstJoinedStr] = arena_alloc(arena, 16)
+    p: ptr[AstJoinedStr] = arena_alloc(arena, sizeof(AstJoinedStr))
     p.values = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_formatted_value(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstFormattedValue] = arena_alloc(arena, 24)
+    p: ptr[AstFormattedValue] = arena_alloc(arena, sizeof(AstFormattedValue))
     p.value = ast_read_node_field(r, arena)
     p.conversion = ast_read_int_field(r)
     p.format_spec = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_list_comp(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstListComp] = arena_alloc(arena, 24)
+    p: ptr[AstListComp] = arena_alloc(arena, sizeof(AstListComp))
     p.elt = ast_read_node_field(r, arena)
     p.generators = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_lambda(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstLambda] = arena_alloc(arena, 16)
+    p: ptr[AstLambda] = arena_alloc(arena, sizeof(AstLambda))
     p.args = ast_read_node(r, arena)
     p.body = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_arguments(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstArguments] = arena_alloc(arena, 40)
+    p: ptr[AstArguments] = arena_alloc(arena, sizeof(AstArguments))
     p.args = ast_read_node_list(r, arena)
     p.vararg = ast_read_node_field(r, arena)
     p.defaults = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_arg(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstArg] = arena_alloc(arena, 16)
+    p: ptr[AstArg] = arena_alloc(arena, sizeof(AstArg))
     p.name = ast_read_string_field(r, arena)
     p.annotation = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_keyword(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstKeyword] = arena_alloc(arena, 16)
+    p: ptr[AstKeyword] = arena_alloc(arena, sizeof(AstKeyword))
     p.name = ast_read_string_field(r, arena)
     p.value = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_alias(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstAlias] = arena_alloc(arena, 16)
+    p: ptr[AstAlias] = arena_alloc(arena, sizeof(AstAlias))
     p.name = ast_read_string_field(r, arena)
     p.asname = ast_read_string_field(r, arena)
     node.data = p
 
 def ast_read_comprehension(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstComprehension] = arena_alloc(arena, 32)
+    p: ptr[AstComprehension] = arena_alloc(arena, sizeof(AstComprehension))
     p.target = ast_read_node_field(r, arena)
     p.iter = ast_read_node_field(r, arena)
     p.ifs = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_withitem(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstWithItem] = arena_alloc(arena, 16)
+    p: ptr[AstWithItem] = arena_alloc(arena, sizeof(AstWithItem))
     p.context_expr = ast_read_node_field(r, arena)
     p.optional_vars = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_match_case(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstMatchCase] = arena_alloc(arena, 32)
+    p: ptr[AstMatchCase] = arena_alloc(arena, sizeof(AstMatchCase))
     p.pattern = ast_read_node_field(r, arena)
     p.guard = ast_read_node_field(r, arena)
     p.body = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_match_value(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstMatchValue] = arena_alloc(arena, 8)
+    p: ptr[AstMatchValue] = arena_alloc(arena, sizeof(AstMatchValue))
     p.value = ast_read_node_field(r, arena)
     node.data = p
 
 def ast_read_match_or(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstMatchOr] = arena_alloc(arena, 16)
+    p: ptr[AstMatchOr] = arena_alloc(arena, sizeof(AstMatchOr))
     p.patterns = ast_read_node_list(r, arena)
     node.data = p
 
 def ast_read_match_as(r: ptr[MpReader], arena: ptr[MpArena], node: ptr[AstNode]) -> void:
-    p: ptr[AstMatchAs] = arena_alloc(arena, 16)
+    p: ptr[AstMatchAs] = arena_alloc(arena, sizeof(AstMatchAs))
     p.pattern = ast_read_node_field(r, arena)
     p.name = ast_read_string_field(r, arena)
     node.data = p
@@ -741,7 +741,7 @@ def deserialize_ast(buf: ptr[u8], buf_len: i64) -> ptr[AstNode]:
 
     All memory is arena-allocated. Caller receives the root node.
     """
-    arena: ptr[MpArena] = arena_new(buf_len * 4)
+    arena: ptr[MpArena] = arena_new(buf_len * 64)
     r: ptr[MpReader] = mp_reader_new(buf + 4, buf_len - 4)
     root: ptr[AstNode] = ast_read_node(r, arena)
     return root

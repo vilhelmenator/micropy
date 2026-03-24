@@ -23,6 +23,10 @@ from strmap import StrMap, strmap_get, strmap_has
 from native_compiler_state import CompilerState, FieldList, field_list_find
 from native_infer import native_infer_type, _strip_ptr, _ends_with_star
 
+# Forward declaration for call dispatch (circular dep: call imports expr)
+# Can't import the module (circular), so declare the prototype directly.
+c_code("MpStr* native_codegen_call_native_compile_call(CompilerState* s, AstNode* node);")
+
 # ── compile_op ──────────────────────────────────────────────────────────
 
 def native_compile_op(op: u8) -> str:
@@ -290,6 +294,10 @@ def native_compile_expr(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         if _ends_with_star(obj_type):
             return str_format("%s->%s", val2.data, attr_name.data)
         return str_format("%s.%s", val2.data, attr_name.data)
+
+    # ── Call dispatch (forward declared above, linked from native_codegen_call)
+    if node.tag == TAG_CALL:
+        return native_codegen_call_native_compile_call(s, node)
 
     # ── Fallback ────────────────────────────────────────────────────
     return str_new("0 /* unknown expr */")

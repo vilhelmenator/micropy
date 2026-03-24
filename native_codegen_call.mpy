@@ -20,13 +20,11 @@ from native_codegen_expr import native_compile_expr
 
 # ── Builtins table ──────────────────────────────────────────────────────
 
-BUILTIN_COUNT: i32 = 151
-
 class BuiltinEntry:
     key: cstr
     value: cstr
 
-builtin_map: array[BuiltinEntry, 152] = [
+builtin_map: array[BuiltinEntry] = [
     BuiltinEntry("print_int", "mp_print_int"), BuiltinEntry("print_float", "mp_print_float"),
     BuiltinEntry("print_str", "mp_print_str"), BuiltinEntry("print_bool", "mp_print_bool"),
     BuiltinEntry("print_val", "mp_print_val"),
@@ -124,9 +122,15 @@ builtin_map: array[BuiltinEntry, 152] = [
 
 def lookup_builtin(name: str) -> cstr:
     """Look up a builtin function name. Returns C name or NULL."""
-    for i in range(BUILTIN_COUNT):
+    if name is None:
+        return None
+    if name.data is None:
+        return None
+    i: i32 = 0
+    while builtin_map[i].key[0] != 0:
         if strcmp(name.data, builtin_map[i].key) == 0:
             return builtin_map[i].value
+        i = i + 1
     return None
 
 # ── 4.5: Type cast handlers ────────────────────────────────────────────

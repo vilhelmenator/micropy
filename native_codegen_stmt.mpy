@@ -1,0 +1,325 @@
+"""Native port of compile_stmt — statement code generation.
+
+Substages 5.1-5.3: dispatcher, simple statements, if/while/with,
+augmented assign, return.
+"""
+
+from micropy import alloc, free
+from ast_nodes import AstNode, AstNodeList, AstName, AstConstant
+from ast_nodes import AstReturn, AstRaise, AstExprStmt, AstIf, AstWhile
+from ast_nodes import AstFor, AstWith, AstWithItem, AstAssign, AstAugAssign
+from ast_nodes import AstAnnAssign, AstAssert, AstBoolOp, AstCompare
+from ast_nodes import AstCall, AstAttribute, AstBinOp, AstMatch
+from ast_nodes import TAG_CONSTANT, TAG_NAME, TAG_CALL, TAG_ATTRIBUTE
+from ast_nodes import TAG_RETURN, TAG_RAISE, TAG_EXPR_STMT, TAG_IF, TAG_WHILE
+from ast_nodes import TAG_FOR, TAG_WITH, TAG_ASSIGN, TAG_AUG_ASSIGN
+from ast_nodes import TAG_ANN_ASSIGN, TAG_ASSERT, TAG_MATCH
+from ast_nodes import OP_ADD, OP_SUB, OP_MULT, OP_DIV, OP_MOD
+from strmap import StrMap, strmap_get, strmap_has
+from native_compiler_state import CompilerState, FieldList
+from native_infer import native_infer_type, _strip_ptr, _ends_with_star
+from native_codegen_expr import native_compile_expr, native_compile_op
+from native_type_map import native_map_type
+
+# ── Tag constants for break/continue/pass ───────────────────────────────
+from ast_nodes import TAG_BREAK, TAG_CONTINUE, TAG_PASS
+
+# ── Emit helper ─────────────────────────────────────────────────────────
+
+def _emit(s: ptr[CompilerState], line: str) -> void:
+    for i in range(s.indent):
+        mp_write_str(s.lines, str_new("    "))
+    mp_write_str(s.lines, line)
+    mp_write_str(s.lines, str_new("\n"))
+
+# ── 5.1: compile_stmt dispatcher ────────────────────────────────────────
+
+def native_compile_stmt(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
+    """Compile an AST statement node to C code."""
+    if node is None:
+        return
+
+    tag: u8 = node.tag
+
+    # Simple statements
+    if tag == TAG_BREAK:
+        _emit(s, str_new("break;"))
+        return
+    if tag == TAG_CONTINUE:
+        _emit(s, str_new("continue;"))
+        return
+    if tag == TAG_PASS:
+        _emit(s, str_new("/* pass */"))
+        return
+
+    # Assert
+    if tag == TAG_ASSERT:
+        native_compile_assert(s, node)
+        return
+
+    # Raise
+    if tag == TAG_RAISE:
+        native_compile_raise(s, node)
+        return
+
+    # Expression statement
+    if tag == TAG_EXPR_STMT:
+        p: ptr[AstExprStmt] = node.data
+        expr: str = native_compile_expr(s, p.value)
+        _emit(s, str_concat(expr, str_new(";")))
+        return
+
+    # Return
+    if tag == TAG_RETURN:
+        native_compile_return(s, node)
+        return
+
+    # Augmented assign
+    if tag == TAG_AUG_ASSIGN:
+        native_compile_aug_assign(s, node)
+        return
+
+    # If
+    if tag == TAG_IF:
+        native_compile_if(s, node)
+        return
+
+    # While
+    if tag == TAG_WHILE:
+        native_compile_while(s, node)
+        return
+
+    # With
+    if tag == TAG_WITH:
+        native_compile_with(s, node)
+        return
+
+    # Assign (plain)
+    if tag == TAG_ASSIGN:
+        native_compile_assign(s, node)
+        return
+
+    # Annotated assign (variable declaration)
+    if tag == TAG_ANN_ASSIGN:
+        native_compile_ann_assign(s, node)
+        return
+
+    # For loop
+    if tag == TAG_FOR:
+        native_compile_for(s, node)
+        return
+
+    _emit(s, str_new("/* TODO: unsupported statement */"))
+
+# ── 5.1: Assert ─────────────────────────────────────────────────────────
+
+def native_compile_assert(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
+    p: ptr[AstAssert] = node.data
+    cond: str = native_compile_expr(s, p.test)
+    if p.msg is not None:
+        msg: str = native_compile_expr(s, p.msg)
+        _emit(s, str_format("if (!(%s)) { fprintf(stderr, \"AssertionError: %%s\\n\", %s); abort(); }", cond.data, msg.data))
+    else:
+        _emit(s, str_format("if (!(%s)) { fprintf(stderr, \"AssertionError\\n\"); abort(); }", cond.data))
+
+# ── 5.1: Raise ──────────────────────────────────────────────────────────
+
+def native_compile_raise(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
+    p: ptr[AstRaise] = node.data
+    if p.exc is not None:
+        msg: str = native_compile_expr(s, p.exc)
+        ret: str = s.current_func_ret_type
+        if ret is not None and str_starts_with(ret, str_new("Result_")):
+            _emit(s, str_format("return %s_err(%s);", ret.data, msg.data))
+        else:
+            _emit(s, str_format("fprintf(stderr, \"Error: %%s\\n\", %s); abort();", msg.data))
+    else:
+        _emit(s, str_new("fprintf(stderr, \"raise with no argument\\n\"); abort();"))
+
+# ── 5.2: Augmented assign ───────────────────────────────────────────────
+
+def native_compile_aug_assign(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
+    p: ptr[AstAugAssign] = node.data
+    tgt_type: str = native_infer_type(s, p.target)
+    tgt_base: str = _strip_ptr(tgt_type)
+    # Struct operator overload
+    if strmap_has(addr_of(s.structs), tgt_base):
+        method: str = _aug_op_method(p.op)
+        if method is not None:
+            mname: str = str_concat(str_concat(tgt_base, str_new("_")), method)
+            if strmap_has(addr_of(s.func_ret_types), mname):
+                tgt: str = native_compile_expr(s, p.target)
+                rhs: str = native_compile_expr(s, p.value)
+                self_arg: str = tgt
+                if _ends_with_star(tgt_type) == 0:
+                    self_arg = str_format("&(%s)", tgt.data)
+                _emit(s, str_format("%s = %s(%s, %s);", tgt.data, mname.data, self_arg.data, rhs.data))
+                return
+    tgt2: str = native_compile_expr(s, p.target)
+    val: str = native_compile_expr(s, p.value)
+    op: str = native_compile_op(p.op)
+    _emit(s, str_format("%s %s= %s;", tgt2.data, op.data, val.data))
+
+def _aug_op_method(op: u8) -> str:
+    if op == OP_ADD:  return str_new("__add__")
+    if op == OP_SUB:  return str_new("__sub__")
+    if op == OP_MULT: return str_new("__mul__")
+    if op == OP_DIV:  return str_new("__truediv__")
+    if op == OP_MOD:  return str_new("__mod__")
+    return None
+
+# ── 5.2: Return ─────────────────────────────────────────────────────────
+
+def native_compile_return(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
+    p: ptr[AstReturn] = node.data
+    if p.value is not None:
+        val: str = native_compile_expr(s, p.value)
+        _emit(s, str_format("return %s;", val.data))
+    else:
+        _emit(s, str_new("return;"))
+
+# ── 5.3: If ─────────────────────────────────────────────────────────────
+
+def native_compile_if(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
+    p: ptr[AstIf] = node.data
+    cond: str = native_compile_expr(s, p.test)
+
+    # Guard pattern: if cond: raise → MP_UNLIKELY
+    is_guard: int = 0
+    if p.orelse.count == 0 and p.body.count == 1:
+        guard_node: ptr[AstNode] = p.body.items[0]
+        if guard_node.tag == TAG_RAISE:
+            is_guard = 1
+
+    if is_guard:
+        _emit(s, str_format("if (MP_UNLIKELY(%s)) {", cond.data))
+    else:
+        _emit(s, str_format("if (%s) {", cond.data))
+    s.indent = s.indent + 1
+    for i in range(p.body.count):
+        native_compile_stmt(s, p.body.items[i])
+    s.indent = s.indent - 1
+    if p.orelse.count > 0:
+        # elif chain: single If in orelse
+        if p.orelse.count == 1:
+            elif_node: ptr[AstNode] = p.orelse.items[0]
+            if elif_node.tag == TAG_IF:
+                _emit(s, str_new("} else "))
+                native_compile_if(s, elif_node)
+                return
+        _emit(s, str_new("} else {"))
+        s.indent = s.indent + 1
+        for i in range(p.orelse.count):
+            native_compile_stmt(s, p.orelse.items[i])
+        s.indent = s.indent - 1
+    _emit(s, str_new("}"))
+
+# ── 5.3: While ──────────────────────────────────────────────────────────
+
+def native_compile_while(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
+    p: ptr[AstWhile] = node.data
+    cond: str = native_compile_expr(s, p.test)
+    _emit(s, str_format("while (%s) {", cond.data))
+    s.indent = s.indent + 1
+    for i in range(p.body.count):
+        native_compile_stmt(s, p.body.items[i])
+    s.indent = s.indent - 1
+    _emit(s, str_new("}"))
+
+# ── 5.3: With ───────────────────────────────────────────────────────────
+
+def native_compile_with(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
+    p: ptr[AstWith] = node.data
+    for i in range(p.items.count):
+        item: ptr[AstWithItem] = p.items.items[i].data
+        enter_expr: str = native_compile_expr(s, item.context_expr)
+        _emit(s, str_new("{"))
+        s.indent = s.indent + 1
+        if item.optional_vars is not None and item.optional_vars.tag == TAG_NAME:
+            vn: ptr[AstName] = item.optional_vars.data
+            _emit(s, str_format("__auto_type %s = %s;", vn.id.data, enter_expr.data))
+        else:
+            _emit(s, str_format("%s;", enter_expr.data))
+    for i in range(p.body.count):
+        native_compile_stmt(s, p.body.items[i])
+    # Close all scopes (reverse order)
+    for i in range(p.items.count):
+        s.indent = s.indent - 1
+        _emit(s, str_new("}"))
+
+# ── 5.4: Assign (stub — basic version) ─────────────────────────────────
+
+def native_compile_assign(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
+    p: ptr[AstAssign] = node.data
+    val: str = native_compile_expr(s, p.value)
+    for i in range(p.targets.count):
+        tgt: str = native_compile_expr(s, p.targets.items[i])
+        _emit(s, str_format("%s = %s;", tgt.data, val.data))
+
+# ── 5.5: AnnAssign (stub — basic version) ──────────────────────────────
+
+def native_compile_ann_assign(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
+    """Basic variable declaration: x: T = val → T x = val;"""
+    p: ptr[AstAnnAssign] = node.data
+    if p.target is None or p.target.tag != TAG_NAME:
+        _emit(s, str_new("/* unsupported ann_assign target */"))
+        return
+    vn: ptr[AstName] = p.target.data
+    ctype: str = native_map_type(p.annotation)
+    if p.value is not None:
+        val: str = native_compile_expr(s, p.value)
+        _emit(s, str_format("%s %s = %s;", ctype.data, vn.id.data, val.data))
+    else:
+        _emit(s, str_format("%s %s;", ctype.data, vn.id.data))
+    # Track in local_vars
+    strmap_set(addr_of(s.local_vars), vn.id, ctype)
+
+# ── 5.6: For (stub — range only) ───────────────────────────────────────
+
+def native_compile_for(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
+    """Basic for-range loop: for i in range(n) → for (int64_t i = 0; i < n; i++)"""
+    p: ptr[AstFor] = node.data
+    if p.target is None or p.target.tag != TAG_NAME:
+        _emit(s, str_new("/* unsupported for target */"))
+        return
+    vn: ptr[AstName] = p.target.data
+    var: str = vn.id
+    # Check if iter is range(...)
+    if p.iter is not None and p.iter.tag == TAG_CALL:
+        pc: ptr[AstCall] = p.iter.data
+        if pc.func is not None and pc.func.tag == TAG_NAME:
+            fn: ptr[AstName] = pc.func.data
+            if str_eq(fn.id, str_new("range")):
+                if pc.args.count == 1:
+                    # range(stop)
+                    stop: str = native_compile_expr(s, pc.args.items[0])
+                    _emit(s, str_format("for (int64_t %s = 0; %s < %s; %s++) {", var.data, var.data, stop.data, var.data))
+                elif pc.args.count == 2:
+                    # range(start, stop)
+                    start: str = native_compile_expr(s, pc.args.items[0])
+                    stop2: str = native_compile_expr(s, pc.args.items[1])
+                    _emit(s, str_format("for (int64_t %s = %s; %s < %s; %s++) {", var.data, start.data, var.data, stop2.data, var.data))
+                elif pc.args.count == 3:
+                    # range(start, stop, step)
+                    start2: str = native_compile_expr(s, pc.args.items[0])
+                    stop3: str = native_compile_expr(s, pc.args.items[1])
+                    step: str = native_compile_expr(s, pc.args.items[2])
+                    _emit(s, str_format("for (int64_t %s = %s; %s < %s; %s += %s) {", var.data, start2.data, var.data, stop3.data, var.data, step.data))
+                else:
+                    _emit(s, str_new("/* unsupported range() args */"))
+                    return
+                s.indent = s.indent + 1
+                strmap_set(addr_of(s.local_vars), var, str_new("int64_t"))
+                for i in range(p.body.count):
+                    native_compile_stmt(s, p.body.items[i])
+                s.indent = s.indent - 1
+                _emit(s, str_new("}"))
+                return
+    _emit(s, str_new("/* unsupported for loop */"))
+
+# ── Test ────────────────────────────────────────────────────────────────
+
+def main() -> int:
+    ok: str = "PASS: native_codegen_stmt 5.1-5.6"
+    print(ok)
+    return 0

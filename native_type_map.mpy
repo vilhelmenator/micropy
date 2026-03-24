@@ -12,13 +12,11 @@ from strmap import StrMap, strmap_new, strmap_free, strmap_get, strmap_set
 
 # ── Static type map ─────────────────────────────────────────────────────
 
-TYPE_MAP_SIZE: i32 = 28
-
 class TypeEntry:
     key:   cstr
     value: cstr
 
-type_map_entries: array[TypeEntry, 28] = [
+type_map_entries: array[TypeEntry] = [
     TypeEntry("int",         "int64_t"),
     TypeEntry("float",       "double"),
     TypeEntry("bool",        "int"),
@@ -51,9 +49,11 @@ type_map_entries: array[TypeEntry, 28] = [
 
 def lookup_type(name: str) -> cstr:
     """Look up a type name in the static type map. Returns NULL if not found."""
-    for i in range(TYPE_MAP_SIZE):
+    i: i32 = 0
+    while type_map_entries[i].key[0] != 0:
         if strcmp(name.data, type_map_entries[i].key) == 0:
             return type_map_entries[i].value
+        i = i + 1
     return None
 
 # ── Alias map (populated by compiler, cleared per file) ─────────────────
