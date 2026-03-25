@@ -94,7 +94,7 @@ def _first_pass(s: ptr[CompilerState], body: AstNodeList) -> void:
                             ft: str = native_map_type(aa.annotation)
                             # Expand __array__ to "elemtype FIELDNAME[size]" format
                             # Store as special ctype that _emit_struct_defs can parse
-                            if str_eq(ft, str_new("__array__")):
+                            if ft == "__array__":
                                 if aa.annotation is not None and aa.annotation.tag == TAG_SUBSCRIPT:
                                     asub: ptr[AstSubscript] = aa.annotation.data
                                     sl: ptr[AstNode] = asub.slice
@@ -105,7 +105,7 @@ def _first_pass(s: ptr[CompilerState], body: AstNodeList) -> void:
                                             sz: str = native_compile_expr(s, tup.elts.items[1])
                                             ft = str_format("__arr_%s_%s", et.data, sz.data)
                             # Expand __bitfield__ to "__bf_TYPE_WIDTH"
-                            if str_eq(ft, str_new("__bitfield__")):
+                            if ft == "__bitfield__":
                                 if aa.annotation is not None and aa.annotation.tag == TAG_SUBSCRIPT:
                                     bf_sub: ptr[AstSubscript] = aa.annotation.data
                                     bf_sl: ptr[AstNode] = bf_sub.slice
@@ -125,7 +125,7 @@ def _first_pass(s: ptr[CompilerState], body: AstNodeList) -> void:
                 if item3 is not None and item3.tag == TAG_FUNCTION_DEF:
                     md: ptr[AstFunctionDef] = item3.data
                     mret: str = native_map_type(md.returns)
-                    mname: str = str_concat(str_concat(cd.name, str_new("_")), md.name)
+                    mname: str = str_concat(cd.name + "_", md.name)
                     strmap_set(addr_of(s.func_ret_types), mname, mret)
             continue
 
@@ -176,16 +176,16 @@ def _scan_typed_lists(s: ptr[CompilerState], body: AstNodeList) -> void:
                 sub_val: ptr[AstNode] = asub.value
                 if sub_val is not None and sub_val.tag == TAG_NAME:
                     bn: ptr[AstName] = sub_val.data
-                    if str_eq(bn.id, str_new("typed_list")) or str_eq(bn.id, str_new("list")):
+                    if bn.id == "typed_list" or bn.id == "list":
                         elem_t: str = native_map_type(asub.slice)
                         if strmap_has(addr_of(s.typed_lists), elem_t) == 0:
                             # Generate name: int64_t→IntList, double→FloatList, etc.
-                            list_name: str = str_concat(elem_t, str_new("List"))
-                            if str_eq(elem_t, str_new("int64_t")):
+                            list_name: str = elem_t + "List"
+                            if elem_t == "int64_t":
                                 list_name = str_new("IntList")
-                            elif str_eq(elem_t, str_new("double")):
+                            elif elem_t == "double":
                                 list_name = str_new("FloatList")
-                            elif str_eq(elem_t, str_new("uint8_t")):
+                            elif elem_t == "uint8_t":
                                 list_name = str_new("ByteList")
                             strmap_set(addr_of(s.typed_lists), elem_t, list_name)
         # Also scan inside function bodies
@@ -303,7 +303,7 @@ def _emit_struct_defs(s: ptr[CompilerState], body: AstNodeList) -> void:
                     _emit_raw(s, str_format("    %s %s : %s;", bf_t2.data, fname.data, bf_w2.data))
                 else:
                     _emit_raw(s, str_format("    /* bitfield %s */", fname.data))
-            elif str_eq(ftype, str_new("__funcptr__")) or str_eq(ftype, str_new("__vec__")) or str_eq(ftype, str_new("__typed_list__")):
+            elif ftype == "__funcptr__" or ftype == "__vec__" or ftype == "__typed_list__":
                 _emit_raw(s, str_format("    /* TODO: %s %s */", ftype.data, fname.data))
             else:
                 _emit_raw(s, str_format("    %s %s;", ftype.data, fname.data))
@@ -318,7 +318,7 @@ def _emit_struct_defs(s: ptr[CompilerState], body: AstNodeList) -> void:
             if str_starts_with(ftype2, str_new("__")):
                 continue
             if ctor_count > 0:
-                arg_list = str_concat(arg_list, str_new(", "))
+                arg_list = arg_list + ", "
             arg_list = str_concat(arg_list, str_format("%s %s", ftype2.data, fname2.data))
             body_list = str_concat(body_list, str_format("    _s.%s = %s;\n", fname2.data, fname2.data))
             ctor_count = ctor_count + 1
@@ -402,7 +402,7 @@ def _emit_function_prototypes(s: ptr[CompilerState], body: AstNodeList) -> void:
         if _is_extern_func(fd):
             continue
         ret: str = native_map_type(fd.returns)
-        if str_eq(fd.name, str_new("main")):
+        if fd.name == "main":
             ret = str_new("int")
         # Build arg string
         args_node: ptr[AstArguments] = fd.args.data
@@ -411,11 +411,11 @@ def _emit_function_prototypes(s: ptr[CompilerState], body: AstNodeList) -> void:
             arg: ptr[AstArg] = args_node.args.items[j].data
             atype: str = native_map_type(arg.annotation)
             if j > 0:
-                arg_str = str_concat(arg_str, str_new(", "))
+                arg_str = arg_str + ", "
             arg_str = str_concat(arg_str, str_format("%s %s", atype.data, arg.name.data))
         if args_node.vararg is not None:
             if args_node.args.count > 0:
-                arg_str = str_concat(arg_str, str_new(", ..."))
+                arg_str = arg_str + ", ..."
             else:
                 arg_str = str_new("...")
         elif args_node.args.count == 0:
@@ -457,17 +457,17 @@ def _compile_one_func(s: ptr[CompilerState], fd: ptr[AstFunctionDef], prefix: st
         arg: ptr[AstArg] = args_node.args.items[j].data
         # Self parameter in struct methods gets pointer-to-struct type
         atype: str = native_map_type(arg.annotation)
-        if str_eq(arg.name, str_new("self")) and str_len(prefix) > 0:
+        if arg.name == "self" and str_len(prefix) > 0:
             struct_name: str = str_slice(prefix, 0, str_len(prefix) - 1)
-            atype = str_concat(struct_name, str_new("*"))
+            atype = struct_name + "*"
         if j > 0:
-            arg_str = str_concat(arg_str, str_new(", "))
+            arg_str = arg_str + ", "
         arg_str = str_concat(arg_str, str_format("%s %s", atype.data, arg.name.data))
         strmap_set(addr_of(s.func_args), arg.name, atype)
     # Variadic: *args → append ...
     if args_node.vararg is not None:
         if args_node.args.count > 0:
-            arg_str = str_concat(arg_str, str_new(", ..."))
+            arg_str = arg_str + ", ..."
         else:
             arg_str = str_new("...")
     elif args_node.args.count == 0:
@@ -479,7 +479,7 @@ def _compile_one_func(s: ptr[CompilerState], fd: ptr[AstFunctionDef], prefix: st
         fname = str_concat(prefix, fd.name)
 
     # Emit function signature
-    if str_eq(fname, str_new("main")):
+    if fname == "main":
         _emit_raw(s, str_new("int main(void) {"))
     else:
         _emit_raw(s, str_format("%s %s(%s) {", ret.data, fname.data, arg_str.data))
@@ -504,7 +504,7 @@ def _emit_functions(s: ptr[CompilerState], body: AstNodeList) -> void:
         node: ptr[AstNode] = body.items[i]
         if node is not None and node.tag == TAG_FUNCTION_DEF:
             fd: ptr[AstFunctionDef] = node.data
-            if str_eq(fd.name, str_new("main")):
+            if fd.name == "main":
                 has_main = 1
             _compile_one_func(s, fd, str_new(""))
             # Emit test wrapper for @test functions
@@ -531,7 +531,7 @@ def _emit_functions(s: ptr[CompilerState], body: AstNodeList) -> void:
         elif node is not None and node.tag == TAG_CLASS_DEF:
             cd: ptr[AstClassDef] = node.data
             if strmap_has(addr_of(s.structs), cd.name):
-                method_prefix: str = str_concat(cd.name, str_new("_"))
+                method_prefix: str = cd.name + "_"
                 for j in range(cd.body.count):
                     method: ptr[AstNode] = cd.body.items[j]
                     if method is not None and method.tag == TAG_FUNCTION_DEF:
@@ -540,8 +540,8 @@ def _emit_functions(s: ptr[CompilerState], body: AstNodeList) -> void:
                         m_args: ptr[AstArguments] = md.args.data
                         if m_args.args.count > 0:
                             first_arg: ptr[AstArg] = m_args.args.items[0].data
-                            if str_eq(first_arg.name, str_new("self")):
-                                strmap_set(addr_of(s.func_args), str_new("self"), str_concat(cd.name, str_new("*")))
+                            if first_arg.name == "self":
+                                strmap_set(addr_of(s.func_args), str_new("self"), cd.name + "*")
                         _compile_one_func(s, md, method_prefix)
 
     # Emit test main if needed

@@ -43,7 +43,7 @@ def native_infer_type(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
     if node.tag == TAG_NAME:
         p2: ptr[AstName] = node.data
         name: str = p2.id
-        if str_eq(name, str_new("True")) or str_eq(name, str_new("False")):
+        if name == "True" or name == "False":
             return str_new("int")
         t: str = strmap_get(addr_of(s.local_vars), name)
         if t is not None:
@@ -69,11 +69,11 @@ def native_infer_type(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         if strmap_has(addr_of(s.structs), lb):
             op_method: str = _binop_method_name(p3.op)
             if op_method is not None:
-                method_name: str = str_concat(str_concat(lb, str_new("_")), op_method)
+                method_name: str = str_concat(lb + "_", op_method)
                 ret: str = strmap_get(addr_of(s.func_ret_types), method_name)
                 if ret is not None:
                     return ret
-        if str_eq(lt, str_new("double")) or str_eq(rt, str_new("double")):
+        if lt == "double" or rt == "double":
             return str_new("double")
         return str_new("int64_t")
 
@@ -101,8 +101,8 @@ def native_infer_type(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         if fl is not None:
             ft: str = field_list_find(fl, p5.attr)
             if ft is not None:
-                if str_eq(ft, str_new("__array__")):
-                    key: str = str_concat(str_concat(base, str_new(".")), p5.attr)
+                if ft == "__array__":
+                    key: str = str_concat(base + ".", p5.attr)
                     et: str = strmap_get(addr_of(s.struct_array_fields), key)
                     if et is not None:
                         return et
@@ -127,7 +127,7 @@ def native_infer_type(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
             pa: ptr[AstAttribute] = sub_val.data
             ot: str = native_infer_type(s, pa.value)
             b: str = _strip_ptr(ot)
-            key2: str = str_concat(str_concat(b, str_new(".")), pa.attr)
+            key2: str = str_concat(b + ".", pa.attr)
             et3: str = strmap_get(addr_of(s.struct_array_fields), key2)
             if et3 is not None:
                 return et3
@@ -172,13 +172,13 @@ def native_infer_call_type(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
             return fpt
 
         # Cast builtins
-        if str_eq(fname, str_new("cast_int")):
+        if fname == "cast_int":
             return str_new("int64_t")
-        if str_eq(fname, str_new("cast_float")):
+        if fname == "cast_float":
             return str_new("double")
-        if str_eq(fname, str_new("cast_byte")):
+        if fname == "cast_byte":
             return str_new("uint8_t")
-        if str_eq(fname, str_new("cast_bool")):
+        if fname == "cast_bool":
             return str_new("int")
 
         # Struct constructor
@@ -186,15 +186,15 @@ def native_infer_call_type(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
             return fname
 
         # Result helpers
-        if str_eq(fname, str_new("is_ok")) or str_eq(fname, str_new("is_err")):
+        if fname == "is_ok" or fname == "is_err":
             return str_new("int")
-        if str_eq(fname, str_new("err_msg")):
+        if fname == "err_msg":
             return str_new("char*")
-        if str_eq(fname, str_new("input")):
+        if fname == "input":
             return str_new("MpStr*")
-        if str_eq(fname, str_new("exit")):
+        if fname == "exit":
             return str_new("void")
-        if str_eq(fname, str_new("str")):
+        if fname == "str":
             return str_new("MpStr*")
 
         # Check from_imports
@@ -217,15 +217,15 @@ def native_infer_call_type(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         base: str = _strip_ptr(obj_type)
         # Struct method
         if strmap_has(addr_of(s.structs), base):
-            method_name: str = str_concat(str_concat(base, str_new("_")), pa.attr)
+            method_name: str = str_concat(base + "_", pa.attr)
             ret3: str = strmap_get(addr_of(s.func_ret_types), method_name)
             if ret3 is not None:
                 return ret3
         # String methods
-        if str_eq(obj_type, str_new("MpStr*")):
-            if str_eq(pa.attr, str_new("len")) or str_eq(pa.attr, str_new("find")):
+        if obj_type == "MpStr*":
+            if pa.attr == "len" or pa.attr == "find":
                 return str_new("int64_t")
-            if str_eq(pa.attr, str_new("eq")) or str_eq(pa.attr, str_new("contains")):
+            if pa.attr == "eq" or pa.attr == "contains":
                 return str_new("int")
             return str_new("MpStr*")
 

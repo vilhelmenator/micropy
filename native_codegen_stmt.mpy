@@ -74,20 +74,20 @@ def native_compile_stmt(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
             call_node: ptr[AstCall] = p.value.data
             if call_node.func is not None and call_node.func.tag == TAG_NAME:
                 call_fn: ptr[AstName] = call_node.func.data
-                if str_eq(call_fn.id, str_new("defer")):
+                if call_fn.id == "defer":
                     if call_node.args.count == 1:
                         deferred: str = native_compile_expr(s, call_node.args.items[0])
                         _emit(s, str_format("/* defer: %s */", deferred.data))
                     return
                 # Handle c_code() passthrough
-                if str_eq(call_fn.id, str_new("c_code")):
+                if call_fn.id == "c_code":
                     if call_node.args.count == 1 and call_node.args.items[0].tag == TAG_CONSTANT:
                         cc: ptr[AstConstant] = call_node.args.items[0].data
                         if cc.kind == CONST_STR and cc.str_val is not None:
                             _emit(s, cc.str_val)
                     return
         expr: str = native_compile_expr(s, p.value)
-        _emit(s, str_concat(expr, str_new(";")))
+        _emit(s, expr + ";")
         return
 
     # Return
@@ -172,7 +172,7 @@ def native_compile_aug_assign(s: ptr[CompilerState], node: ptr[AstNode]) -> void
     if strmap_has(addr_of(s.structs), tgt_base):
         method: str = _aug_op_method(p.op)
         if method is not None:
-            mname: str = str_concat(str_concat(tgt_base, str_new("_")), method)
+            mname: str = str_concat(tgt_base + "_", method)
             if strmap_has(addr_of(s.func_ret_types), mname):
                 tgt: str = native_compile_expr(s, p.target)
                 rhs: str = native_compile_expr(s, p.value)
@@ -213,7 +213,7 @@ def native_compile_if(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
     # __bool__ dispatch: if a struct has a __bool__ method, call it
     test_type: str = native_infer_type(s, p.test)
     test_base: str = _strip_ptr(test_type)
-    bool_method: str = str_concat(test_base, str_new("___bool__"))
+    bool_method: str = test_base + "___bool__"
     if strmap_has(addr_of(s.structs), test_base) and strmap_has(addr_of(s.func_ret_types), bool_method):
         obj: str = native_compile_expr(s, p.test)
         if _ends_with_star(test_type):
@@ -268,17 +268,17 @@ def native_compile_while(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
 def _infer_cleanup(open_func: str) -> str:
     """Infer cleanup function from open/create function name.
     Matches Python compiler's _infer_cleanup (codegen_stmts.py:1660)."""
-    if str_eq(open_func, str_new("open")) or str_eq(open_func, str_new("file_open")):
+    if open_func == "open" or open_func == "file_open":
         return str_new("mp_file_close")
     if str_ends_with(open_func, str_new("_open")):
         base: str = str_slice(open_func, 0, str_len(open_func) - 5)
-        return str_concat(base, str_new("_close"))
+        return base + "_close"
     if str_ends_with(open_func, str_new("_new")):
         base2: str = str_slice(open_func, 0, str_len(open_func) - 4)
-        return str_concat(base2, str_new("_free"))
+        return base2 + "_free"
     if str_ends_with(open_func, str_new("_create")):
         base3: str = str_slice(open_func, 0, str_len(open_func) - 7)
-        return str_concat(base3, str_new("_destroy"))
+        return base3 + "_destroy"
     return None
 
 def native_compile_with(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
@@ -354,7 +354,7 @@ def native_compile_ann_assign(s: ptr[CompilerState], node: ptr[AstNode]) -> void
     ctype: str = native_map_type(p.annotation)
 
     # Handle special type sentinels
-    if str_eq(ctype, str_new("__array__")):
+    if ctype == "__array__":
         # array[T, N] → T name[N] = {val};
         elem: str = str_new("int64_t")
         size: str = str_new("0")
@@ -381,12 +381,12 @@ def native_compile_ann_assign(s: ptr[CompilerState], node: ptr[AstNode]) -> void
         strmap_set(addr_of(s.array_vars), vn.id, ai)
         return
 
-    if str_eq(ctype, str_new("__funcptr__")) or str_eq(ctype, str_new("__vec__")):
+    if ctype == "__funcptr__" or ctype == "__vec__":
         _emit(s, str_format("/* TODO: %s %s */", ctype.data, vn.id.data))
         return
 
     # typed_list[T] → TypedListName* var = TypedListName_new()
-    if str_eq(ctype, str_new("__typed_list__")):
+    if ctype == "__typed_list__":
         # Get elem type from annotation
         elem_t: str = str_new("int64_t")
         if p.annotation is not None and p.annotation.tag == TAG_SUBSCRIPT:
@@ -395,7 +395,7 @@ def native_compile_ann_assign(s: ptr[CompilerState], node: ptr[AstNode]) -> void
         # Look up list name from typed_lists map
         list_name: str = strmap_get(addr_of(s.typed_lists), elem_t)
         if list_name is not None:
-            list_type: str = str_concat(list_name, str_new("*"))
+            list_type: str = list_name + "*"
             # Always use TypedListName_new() for typed lists
             _emit(s, str_format("%s %s = %s_new();", list_type.data, vn.id.data, list_name.data))
             strmap_set(addr_of(s.local_vars), vn.id, list_type)
@@ -427,7 +427,7 @@ def native_compile_ann_assign(s: ptr[CompilerState], node: ptr[AstNode]) -> void
         return
 
     # String literal optimization: str = "literal" → stack MpStr
-    if str_eq(ctype, str_new("MpStr*")) and p.value is not None and p.value.tag == TAG_CONSTANT:
+    if ctype == "MpStr*" and p.value is not None and p.value.tag == TAG_CONSTANT:
         sc: ptr[AstConstant] = p.value.data
         if sc.kind == CONST_STR and sc.str_val is not None:
             escaped: str = native_compile_expr(s, p.value)
@@ -457,7 +457,7 @@ def native_compile_for(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
             iter_call: ptr[AstCall] = p.iter.data
             if iter_call.func is not None and iter_call.func.tag == TAG_NAME:
                 iter_fn: ptr[AstName] = iter_call.func.data
-                if str_eq(iter_fn.id, str_new("enumerate")) and iter_call.args.count == 1:
+                if iter_fn.id == "enumerate" and iter_call.args.count == 1:
                     idx_node: ptr[AstNode] = tgt_tup.elts.items[0]
                     val_node: ptr[AstNode] = tgt_tup.elts.items[1]
                     if idx_node.tag == TAG_NAME and val_node.tag == TAG_NAME:
@@ -485,7 +485,7 @@ def native_compile_for(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
             zc: ptr[AstCall] = p.iter.data
             if zc.func is not None and zc.func.tag == TAG_NAME:
                 zfn: ptr[AstName] = zc.func.data
-                if str_eq(zfn.id, str_new("zip")) and zc.args.count == tgt_tup.elts.count:
+                if zfn.id == "zip" and zc.args.count == tgt_tup.elts.count:
                     # Get size from first array
                     first_arr: ptr[AstNode] = zc.args.items[0]
                     bound: str = str_new("0")
@@ -523,7 +523,7 @@ def native_compile_for(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
         pc: ptr[AstCall] = p.iter.data
         if pc.func is not None and pc.func.tag == TAG_NAME:
             fn: ptr[AstName] = pc.func.data
-            if str_eq(fn.id, str_new("range")):
+            if fn.id == "range":
                 if pc.args.count == 1:
                     # range(stop)
                     stop: str = native_compile_expr(s, pc.args.items[0])
@@ -627,7 +627,7 @@ def native_compile_match(s: ptr[CompilerState], node: ptr[AstNode]) -> void:
                         smv: ptr[AstMatchValue] = sub_pat.data
                         sl: str = native_compile_expr(s, smv.value)
                         labels = str_concat(labels, str_format("case %s: ", sl.data))
-                _emit(s, str_concat(labels, str_new("{")))
+                _emit(s, labels + "{")
             s.indent = s.indent + 1
             for j in range(mc2.body.count):
                 native_compile_stmt(s, mc2.body.items[j])
@@ -703,8 +703,8 @@ def _match_pattern_cond(s: ptr[CompilerState], subject: str, pattern: ptr[AstNod
         for i in range(mo2.patterns.count):
             sub_cond: str = _match_pattern_cond(s, subject, mo2.patterns.items[i])
             if i > 0:
-                result = str_concat(result, str_new(" || "))
-            result = str_concat(result, sub_cond)
+                result = result + " || "
+            result = result + sub_cond
         return str_format("(%s)", result.data)
     val2: str = native_compile_expr(s, pattern)
     return str_format("(%s == %s)", subject.data, val2.data)

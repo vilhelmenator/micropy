@@ -137,19 +137,19 @@ def lookup_builtin(name: str) -> cstr:
 
 def native_call_type_cast(s: ptr[CompilerState], fname: str, node: ptr[AstCall], arg_str: str) -> str:
     """Handle int(), float(), str(), cast(), cast_int, etc. Returns NULL if not a cast."""
-    if str_eq(fname, str_new("int")) and node.args.count == 1:
+    if fname == "int" and node.args.count == 1:
         e: str = native_compile_expr(s, node.args.items[0])
         return str_format("((int64_t)(%s))", e.data)
-    if str_eq(fname, str_new("float")) and node.args.count == 1:
+    if fname == "float" and node.args.count == 1:
         e2: str = native_compile_expr(s, node.args.items[0])
         return str_format("((double)(%s))", e2.data)
-    if str_eq(fname, str_new("cast_int")):
+    if fname == "cast_int":
         return str_format("((int64_t)(%s))", arg_str.data)
-    if str_eq(fname, str_new("cast_float")):
+    if fname == "cast_float":
         return str_format("((double)(%s))", arg_str.data)
-    if str_eq(fname, str_new("cast_byte")):
+    if fname == "cast_byte":
         return str_format("((uint8_t)(%s))", arg_str.data)
-    if str_eq(fname, str_new("cast_bool")):
+    if fname == "cast_bool":
         return str_format("((int)(%s))", arg_str.data)
     return None
 
@@ -157,20 +157,20 @@ def native_call_type_cast(s: ptr[CompilerState], fname: str, node: ptr[AstCall],
 
 def native_call_ptr_ops(s: ptr[CompilerState], fname: str, node: ptr[AstCall], arg_str: str) -> str:
     """Handle addr_of, ref, deref, cast_ptr. Returns NULL if not a ptr op."""
-    if str_eq(fname, str_new("addr_of")) or str_eq(fname, str_new("ref")):
+    if fname == "addr_of" or fname == "ref":
         return str_format("(&%s)", arg_str.data)
-    if str_eq(fname, str_new("deref")):
+    if fname == "deref":
         if node.args.count == 2:
             ptr_e: str = native_compile_expr(s, node.args.items[0])
             val_e: str = native_compile_expr(s, node.args.items[1])
             _emit_line(s, str_format("*(%s) = %s;", ptr_e.data, val_e.data))
             return str_new("(void)0")
         return str_format("(*(%s))", arg_str.data)
-    if str_eq(fname, str_new("deref_set")):
+    if fname == "deref_set":
         ptr_e2: str = native_compile_expr(s, node.args.items[0])
         val_e2: str = native_compile_expr(s, node.args.items[1])
         return str_format("(*(%s) = %s)", ptr_e2.data, val_e2.data)
-    if str_eq(fname, str_new("cast_ptr")):
+    if fname == "cast_ptr":
         return str_format("((void*)(%s))", arg_str.data)
     return None
 
@@ -178,23 +178,23 @@ def native_call_ptr_ops(s: ptr[CompilerState], fname: str, node: ptr[AstCall], a
 
 def native_call_abs_min_max(s: ptr[CompilerState], fname: str, node: ptr[AstCall], arg_str: str) -> str:
     """Handle abs(), min(), max(). Returns NULL if not applicable."""
-    if str_eq(fname, str_new("abs")) and node.args.count == 1:
+    if fname == "abs" and node.args.count == 1:
         t: str = native_infer_type(s, node.args.items[0])
         e: str = native_compile_expr(s, node.args.items[0])
-        if str_eq(t, str_new("double")):
+        if t == "double":
             return str_format("fabs(%s)", e.data)
         return str_format("llabs((long long)(%s))", e.data)
     if node.args.count == 2:
-        if str_eq(fname, str_new("min")) or str_eq(fname, str_new("max")):
+        if fname == "min" or fname == "max":
             t2: str = native_infer_type(s, node.args.items[0])
             a: str = native_compile_expr(s, node.args.items[0])
             b: str = native_compile_expr(s, node.args.items[1])
-            if str_eq(t2, str_new("double")):
-                if str_eq(fname, str_new("min")):
+            if t2 == "double":
+                if fname == "min":
                     return str_format("fmin(%s, %s)", a.data, b.data)
                 return str_format("fmax(%s, %s)", a.data, b.data)
             op: cstr = "<"
-            if str_eq(fname, str_new("max")):
+            if fname == "max":
                 op = ">"
             return str_format("((%s) %s (%s) ? (%s) : (%s))", a.data, op, b.data, a.data, b.data)
     return None
@@ -221,12 +221,12 @@ def native_call_len(s: ptr[CompilerState], node: ptr[AstCall]) -> str:
     t: str = native_infer_type(s, arg)
     t_base: str = _strip_ptr(t)
     # __len__ special method
-    len_method: str = str_concat(t_base, str_new("___len__"))
+    len_method: str = t_base + "___len__"
     if strmap_has(addr_of(s.structs), t_base) and strmap_has(addr_of(s.func_ret_types), len_method):
         return str_format("%s(&(%s))", len_method.data, arg_expr.data)
-    if str_eq(t, str_new("MpStr*")):
+    if t == "MpStr*":
         return str_format("mp_str_len(%s)", arg_expr.data)
-    if str_eq(t, str_new("MpList*")):
+    if t == "MpList*":
         return str_format("mp_list_len(%s)", arg_expr.data)
     if _ends_with_star(t):
         return str_format("%s->len", arg_expr.data)
@@ -236,7 +236,7 @@ def native_call_len(s: ptr[CompilerState], node: ptr[AstCall]) -> str:
 
 def native_call_struct_ctor(s: ptr[CompilerState], fname: str, arg_str: str) -> str:
     """Compile StructName(args) → compound literal or _new()."""
-    init_key: str = str_concat(fname, str_new("___init__"))
+    init_key: str = fname + "___init__"
     if strmap_has(addr_of(s.func_ret_types), init_key):
         return str_format("%s_new(%s)", fname.data, arg_str.data)
     if str_len(arg_str) == 0:
@@ -255,23 +255,23 @@ def native_compile_print(s: ptr[CompilerState], pc: ptr[AstCall]) -> str:
     args_c: str = str_new("")
     for i in range(pc.args.count):
         if i > 0:
-            fmt = str_concat(fmt, str_new(" "))
+            fmt = fmt + " "
         arg: ptr[AstNode] = pc.args.items[i]
         t: str = native_infer_type(s, arg)
         expr: str = native_compile_expr(s, arg)
-        if str_eq(t, str_new("double")) or str_eq(t, str_new("float")):
-            fmt = str_concat(fmt, str_new("%g"))
+        if t == "double" or t == "float":
+            fmt = fmt + "%g"
             args_c = str_concat(args_c, str_format(", %s", expr.data))
-        elif str_eq(t, str_new("MpStr*")):
-            fmt = str_concat(fmt, str_new("%.*s"))
+        elif t == "MpStr*":
+            fmt = fmt + "%.*s"
             args_c = str_concat(args_c, str_format(", (int)(%s)->len, (%s)->data", expr.data, expr.data))
-        elif str_eq(t, str_new("int")):
-            fmt = str_concat(fmt, str_new("%d"))
+        elif t == "int":
+            fmt = fmt + "%d"
             args_c = str_concat(args_c, str_format(", %s", expr.data))
         else:
-            fmt = str_concat(fmt, str_new("%lld"))
+            fmt = fmt + "%lld"
             args_c = str_concat(args_c, str_format(", (long long)(%s)", expr.data))
-    fmt = str_concat(fmt, str_new("\\n"))
+    fmt = fmt + "\\n"
     return str_format("printf(\"%s\"%s)", fmt.data, args_c.data)
 
 # ── Emit helper ─────────────────────────────────────────────────────────
@@ -300,7 +300,7 @@ def native_compile_call(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
     arg_str: str = str_new("")
     for i in range(pc.args.count):
         if i > 0:
-            arg_str = str_concat(arg_str, str_new(", "))
+            arg_str = arg_str + ", "
         arg_str = str_concat(arg_str, arg_parts[i])
 
     if func.tag == TAG_NAME:
@@ -308,7 +308,7 @@ def native_compile_call(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         fname: str = fn.id
 
         # test_assert / test_assert_eq
-        if str_eq(fname, str_new("test_assert")):
+        if fname == "test_assert":
             if arg_parts is not None:
                 free(arg_parts)
             if pc.args.count == 2:
@@ -316,7 +316,7 @@ def native_compile_call(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
                 msg: str = native_compile_expr(s, pc.args.items[1])
                 return str_format("mp_test_assert_msg(%s, %s)", cond.data, msg.data)
             return str_format("mp_test_assert(%s)", arg_str.data)
-        if str_eq(fname, str_new("test_assert_eq")):
+        if fname == "test_assert_eq":
             if arg_parts is not None:
                 free(arg_parts)
             return str_format("mp_test_assert_eq(%s)", arg_str.data)
@@ -350,14 +350,14 @@ def native_compile_call(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
             return r4
 
         # len()
-        if str_eq(fname, str_new("len")) and pc.args.count == 1:
+        if fname == "len" and pc.args.count == 1:
             r5: str = native_call_len(s, pc)
             if arg_parts is not None:
                 free(arg_parts)
             return r5
 
         # exit()
-        if str_eq(fname, str_new("exit")):
+        if fname == "exit":
             code: str = arg_str
             if str_len(code) == 0:
                 code = str_new("0")
@@ -366,7 +366,7 @@ def native_compile_call(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
             return str_format("exit(%s)", code.data)
 
         # input()
-        if str_eq(fname, str_new("input")):
+        if fname == "input":
             prompt: str = arg_str
             if str_len(prompt) == 0:
                 prompt = str_new("NULL")
@@ -375,7 +375,7 @@ def native_compile_call(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
             return str_format("mp_input(%s)", prompt.data)
 
         # sort(arr, cmp) — qsort wrapper, matching Python's _call_sort
-        if str_eq(fname, str_new("sort")) and pc.args.count == 2:
+        if fname == "sort" and pc.args.count == 2:
             arr_node: ptr[AstNode] = pc.args.items[0]
             arr_e: str = native_compile_expr(s, arr_node)
             cmp_e: str = native_compile_expr(s, pc.args.items[1])
@@ -390,19 +390,19 @@ def native_compile_call(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
             return str_format("qsort(%s, 0, 0, (int(*)(const void*, const void*))%s)", arr_e.data, cmp_e.data)
 
         # str(x) — convert to MpStr*
-        if str_eq(fname, str_new("str")) and pc.args.count == 1:
+        if fname == "str" and pc.args.count == 1:
             st: str = native_infer_type(s, pc.args.items[0])
             se: str = native_compile_expr(s, pc.args.items[0])
             if arg_parts is not None:
                 free(arg_parts)
-            if str_eq(st, str_new("MpStr*")):
+            if st == "MpStr*":
                 return se
-            if str_eq(st, str_new("double")):
+            if st == "double":
                 return str_format("mp_str_from_float(%s)", se.data)
             return str_format("mp_str_from_int((int64_t)(%s))", se.data)
 
         # sizeof(T)
-        if str_eq(fname, str_new("sizeof")) and pc.args.count == 1:
+        if fname == "sizeof" and pc.args.count == 1:
             sarg: ptr[AstNode] = pc.args.items[0]
             if sarg.tag == TAG_NAME:
                 sn: ptr[AstName] = sarg.data
@@ -411,7 +411,7 @@ def native_compile_call(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
                 return str_format("sizeof(%s)", sn.id.data)
 
         # print() — type-dispatched printf
-        if str_eq(fname, str_new("print")):
+        if fname == "print":
             if arg_parts is not None:
                 free(arg_parts)
             return native_compile_print(s, pc)
@@ -419,19 +419,19 @@ def native_compile_call(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         # str_* function coercion: wrap string literal args as stack MpStr*
         # Matches Python compiler's _STR_OBJ_FUNCS (NOT str_new/str_from_*/str_format)
         is_str_obj_func: int = 0
-        if str_eq(fname, str_new("str_len")) or str_eq(fname, str_new("str_eq")) or str_eq(fname, str_new("str_concat")) or str_eq(fname, str_new("str_free")):
+        if fname == "str_len" or fname == "str_eq" or fname == "str_concat" or fname == "str_free":
             is_str_obj_func = 1
-        if str_eq(fname, str_new("str_contains")) or str_eq(fname, str_new("str_starts_with")) or str_eq(fname, str_new("str_ends_with")):
+        if fname == "str_contains" or fname == "str_starts_with" or fname == "str_ends_with":
             is_str_obj_func = 1
-        if str_eq(fname, str_new("str_slice")) or str_eq(fname, str_new("str_find")) or str_eq(fname, str_new("str_upper")) or str_eq(fname, str_new("str_lower")):
+        if fname == "str_slice" or fname == "str_find" or fname == "str_upper" or fname == "str_lower":
             is_str_obj_func = 1
-        if str_eq(fname, str_new("str_repeat")) or str_eq(fname, str_new("str_strip")) or str_eq(fname, str_new("str_split")):
+        if fname == "str_repeat" or fname == "str_strip" or fname == "str_split":
             is_str_obj_func = 1
         if is_str_obj_func:
             coerced_parts: str = str_new("")
             for ci in range(pc.args.count):
                 if ci > 0:
-                    coerced_parts = str_concat(coerced_parts, str_new(", "))
+                    coerced_parts = coerced_parts + ", "
                 ca: ptr[AstNode] = pc.args.items[ci]
                 if ca.tag == TAG_CONSTANT:
                     cac: ptr[AstConstant] = ca.data
@@ -470,7 +470,7 @@ def native_compile_call(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         attr: str = pa.attr
 
         # MpStr method dispatch — map to mp_str_* functions
-        if str_eq(obj_type, str_new("MpStr*")):
+        if obj_type == "MpStr*":
             c_fn: str = str_format("mp_str_%s", attr.data)
             all_a: str = obj_str
             if str_len(arg_str) > 0:
@@ -495,44 +495,44 @@ def native_compile_call(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
                     return str_format("%s(%s)", c_method.data, all_tl.data)
 
         # MpList method dispatch
-        if str_eq(obj_type, str_new("MpList*")):
-            if str_eq(attr, str_new("append")) and pc.args.count == 1:
+        if obj_type == "MpList*":
+            if attr == "append" and pc.args.count == 1:
                 v: str = native_compile_expr(s, pc.args.items[0])
                 vt: str = native_infer_type(s, pc.args.items[0])
                 boxed: str = v
-                if str_eq(vt, str_new("double")):
+                if vt == "double":
                     boxed = str_format("mp_val_float(%s)", v.data)
-                elif str_eq(vt, str_new("MpStr*")):
+                elif vt == "MpStr*":
                     boxed = str_format("mp_val_str(%s)", v.data)
                 else:
                     boxed = str_format("mp_val_int((int64_t)(%s))", v.data)
                 if arg_parts is not None:
                     free(arg_parts)
                 return str_format("mp_list_append(%s, %s)", obj_str.data, boxed.data)
-            if str_eq(attr, str_new("pop")):
+            if attr == "pop":
                 if arg_parts is not None:
                     free(arg_parts)
                 return str_format("mp_list_pop(%s)", obj_str.data)
-            if str_eq(attr, str_new("len")):
+            if attr == "len":
                 if arg_parts is not None:
                     free(arg_parts)
                 return str_format("mp_list_len(%s)", obj_str.data)
 
         # MpFile method dispatch
-        if str_eq(obj_type, str_new("MpFile")):
-            if str_eq(attr, str_new("write")):
+        if obj_type == "MpFile":
+            if attr == "write":
                 if arg_parts is not None:
                     free(arg_parts)
                 return str_format("mp_file_write(%s, %s)", obj_str.data, arg_str.data)
-            if str_eq(attr, str_new("write_line")):
+            if attr == "write_line":
                 if arg_parts is not None:
                     free(arg_parts)
                 return str_format("mp_file_write_line(%s, %s)", obj_str.data, arg_str.data)
-            if str_eq(attr, str_new("read")):
+            if attr == "read":
                 if arg_parts is not None:
                     free(arg_parts)
                 return str_format("mp_file_read_all(%s)", obj_str.data)
-            if str_eq(attr, str_new("close")):
+            if attr == "close":
                 if arg_parts is not None:
                     free(arg_parts)
                 return str_format("mp_file_close(%s)", obj_str.data)

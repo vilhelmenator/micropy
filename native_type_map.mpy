@@ -148,49 +148,49 @@ def native_map_type(node: ptr[AstNode]) -> str:
             base_name: ptr[AstName] = base.data
             name: str = base_name.id
 
-            if str_eq(name, str_new("array")):
+            if name == "array":
                 return str_new("__array__")
 
-            if str_eq(name, str_new("typed_list")) or str_eq(name, str_new("list")):
+            if name == "typed_list" or name == "list":
                 return str_new("__typed_list__")
 
-            if str_eq(name, str_new("ptr")):
+            if name == "ptr":
                 inner: str = native_map_type(p4.slice)
-                return str_concat(inner, str_new("*"))
+                return inner + "*"
 
-            if str_eq(name, str_new("func")):
+            if name == "func":
                 return str_new("__funcptr__")
 
-            if str_eq(name, str_new("vec")):
+            if name == "vec":
                 return str_new("__vec__")
 
-            if str_eq(name, str_new("volatile")) or str_eq(name, str_new("atomic")):
+            if name == "volatile" or name == "atomic":
                 inner2: str = native_map_type(p4.slice)
-                return str_concat(str_new("volatile "), inner2)
+                return "volatile " + inner2
 
-            if str_eq(name, str_new("thread_local")):
+            if name == "thread_local":
                 inner3: str = native_map_type(p4.slice)
-                return str_concat(str_new("MP_TLS "), inner3)
+                return "MP_TLS " + inner3
 
-            if str_eq(name, str_new("static")):
+            if name == "static":
                 inner4: str = native_map_type(p4.slice)
-                return str_concat(str_new("__static__ "), inner4)
+                return "__static__ " + inner4
 
-            if str_eq(name, str_new("const")):
+            if name == "const":
                 inner5: str = native_map_type(p4.slice)
-                return str_concat(str_new("const "), inner5)
+                return "const " + inner5
 
-            if str_eq(name, str_new("bitfield")):
+            if name == "bitfield":
                 return str_new("__bitfield__")
 
-            if str_eq(name, str_new("backref")):
+            if name == "backref":
                 inner6: str = native_map_type(p4.slice)
-                return str_concat(str_new("__backref__ "), inner6)
+                return "__backref__ " + inner6
 
-            if str_eq(name, str_new("Result")):
+            if name == "Result":
                 inner7: str = native_map_type(p4.slice)
                 mangled: str = mangle_type(inner7)
-                return str_concat(str_new("Result_"), mangled)
+                return "Result_" + mangled
 
     # Tuple → tuple return type
     if node.tag == TAG_TUPLE:
@@ -239,7 +239,7 @@ def native_get_funcptr_info(node: ptr[AstNode], out_ret: ptr[str], out_args: ptr
     if base is None or base.tag != TAG_NAME:
         return 0
     bn: ptr[AstName] = base.data
-    if str_eq(bn.id, str_new("func")) == 0:
+    if bn.id == "func" == 0:
         return 0
     slice: ptr[AstNode] = p.slice
     if slice is None:
@@ -281,10 +281,10 @@ def main() -> int:
 
     # Test mangle_type
     m1: str = mangle_type(str_new("int64_t*"))
-    assert str_eq(m1, str_new("int64_tPtr"))
+    assert m1 == "int64_tPtr"
 
     m2: str = mangle_type(str_new("const int"))
-    assert str_eq(m2, str_new("const_int"))
+    assert m2 == "const_int"
 
     # Test alias map
     strmap_set(alias_map_ptr, str_new("MyInt"), str_new("int32_t"))

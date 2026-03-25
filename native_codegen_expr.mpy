@@ -134,7 +134,7 @@ def native_compile_expr(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
             return str_new("0")
         if p.kind == CONST_STR:
             escaped: str = _escape_str(p.str_val)
-            return str_concat(str_new("\""), str_concat(escaped, str_new("\"")))
+            return str_concat(str_new("\""), escaped + "\"")
         if p.kind == CONST_FLOAT:
             return str_from_float(p.float_val)
         if p.kind == CONST_INT:
@@ -146,11 +146,11 @@ def native_compile_expr(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
     # ── 4.1: Name ───────────────────────────────────────────────────
     if node.tag == TAG_NAME:
         p2: ptr[AstName] = node.data
-        if str_eq(p2.id, str_new("True")):
+        if p2.id == "True":
             return str_new("1")
-        if str_eq(p2.id, str_new("False")):
+        if p2.id == "False":
             return str_new("0")
-        if str_eq(p2.id, str_new("None")):
+        if p2.id == "None":
             return str_new("NULL")
         return p2.id
 
@@ -160,7 +160,7 @@ def native_compile_expr(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         # String concatenation
         if p3.op == OP_ADD:
             lt: str = native_infer_type(s, p3.left)
-            if str_eq(lt, str_new("MpStr*")):
+            if lt == "MpStr*":
                 left: str = native_compile_expr(s, p3.left)
                 right: str = native_compile_expr(s, p3.right)
                 return str_format("mp_str_concat(%s, %s)", left.data, right.data)
@@ -170,7 +170,7 @@ def native_compile_expr(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         if strmap_has(addr_of(s.structs), lb):
             method: str = _binop_method(p3.op)
             if method is not None:
-                mname: str = str_concat(str_concat(lb, str_new("_")), method)
+                mname: str = str_concat(lb + "_", method)
                 if strmap_has(addr_of(s.func_ret_types), mname):
                     left2: str = native_compile_expr(s, p3.left)
                     right2: str = native_compile_expr(s, p3.right)
@@ -194,7 +194,7 @@ def native_compile_expr(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         if p4.op == OP_USUB:
             ot: str = native_infer_type(s, p4.operand)
             ob: str = _strip_ptr(ot)
-            neg_name: str = str_concat(ob, str_new("___neg__"))
+            neg_name: str = ob + "___neg__"
             if strmap_has(addr_of(s.structs), ob):
                 if strmap_has(addr_of(s.func_ret_types), neg_name):
                     operand: str = native_compile_expr(s, p4.operand)
@@ -216,7 +216,7 @@ def native_compile_expr(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         result: str = native_compile_expr(s, p5.values.items[0])
         for i in range(1, p5.values.count):
             part: str = native_compile_expr(s, p5.values.items[i])
-            result = str_concat(result, str_concat(op_str, part))
+            result = str_concat(result, op_str + part)
         return str_format("(%s)", result.data)
 
     # ── 4.3: Compare ────────────────────────────────────────────────
@@ -225,7 +225,7 @@ def native_compile_expr(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         # String == / != comparison
         if p6.op_count == 1 and p6.comparators.count == 1:
             lt3: str = native_infer_type(s, p6.left)
-            if str_eq(lt3, str_new("MpStr*")):
+            if lt3 == "MpStr*":
                 left4: str = native_compile_expr(s, p6.left)
                 right4: str = native_compile_expr(s, p6.comparators.items[0])
                 if p6.ops[0] == OP_EQ:
@@ -239,7 +239,7 @@ def native_compile_expr(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
             if strmap_has(addr_of(s.structs), lb2):
                 cmethod: str = _cmpop_method(p6.ops[0])
                 if cmethod is not None:
-                    cmname: str = str_concat(str_concat(lb2, str_new("_")), cmethod)
+                    cmname: str = str_concat(lb2 + "_", cmethod)
                     if strmap_has(addr_of(s.func_ret_types), cmname):
                         left5: str = native_compile_expr(s, p6.left)
                         right5: str = native_compile_expr(s, p6.comparators.items[0])
@@ -253,7 +253,7 @@ def native_compile_expr(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
             cop: str = native_compile_cmpop(p6.ops[i])
             part2: str = str_format("(%s %s %s)", prev.data, cop.data, right6.data)
             if i > 0:
-                result2 = str_concat(result2, str_concat(str_new(" && "), part2))
+                result2 = str_concat(result2, " && " + part2)
             else:
                 result2 = part2
             prev = right6
@@ -273,9 +273,9 @@ def native_compile_expr(s: ptr[CompilerState], node: ptr[AstNode]) -> str:
         result3: str = str_new("{")
         for i in range(p8.elts.count):
             if i > 0:
-                result3 = str_concat(result3, str_new(", "))
+                result3 = result3 + ", "
             result3 = str_concat(result3, native_compile_expr(s, p8.elts.items[i]))
-        result3 = str_concat(result3, str_new("}"))
+        result3 = result3 + "}"
         return result3
 
     # ── 4.4: Subscript ──────────────────────────────────────────────
