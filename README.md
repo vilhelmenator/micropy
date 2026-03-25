@@ -327,30 +327,26 @@ match status:
 
 ### Lists
 
-`list[T]` gives you a typed, resizable list with Python-style methods:
+`list[T]` gives you a typed, resizable list with Python-style syntax:
 
 ```python
-nums: list[int] = list_new()
-nums.append(10)
-nums.append(20)
-nums.append(30)
+nums: list[int] = [10, 20, 30]
 
 print(len(nums))    # 3
 print(nums[0])      # 10
 nums[1] = 99        # set by index
+nums.append(40)
 v: int = nums.pop() # removes and returns last element
+
+if 20 in nums:
+    print("found")
+
+# slicing and concatenation
+first_two: list[int] = nums[0:2]
+combined: list[int] = nums + other_list
 ```
 
-Float and string element types work the same way:
-
-```python
-fs: list[float] = list_new()
-fs.append(1.5)
-fs.append(2.5)
-print(fs[0])   # 1.5
-```
-
-Methods: `append(x)`, `pop()`, `len()`. Subscript read (`lst[i]`) and write (`lst[i] = x`) auto-box/unbox based on the declared element type.
+Methods: `append(x)`, `pop()`, `len()`. Subscript, `in` operator, slicing, and `+` concatenation work as expected.
 
 ### List comprehensions
 
@@ -363,24 +359,55 @@ pos_sq:  list[int] = [x * x for x in vals if x > 0]
 
 Works with `range(...)`, `array[T, N]`, and typed lists. Use `list[T]` annotation for typed access via `lst[i]`; or plain `list` with `as_int(list_get(lst, i))` / `as_float(...)`.
 
-### Strings
+### Dicts
+
+`dict[K, V]` with Python-style literals, subscript access, and iteration:
 
 ```python
-s: str = str_new("hello")
-t: str = s + str_new(" world")
-if s == str_new("hello"):
-    print(s.upper())        # HELLO
+ages: dict[str, int] = {"alice": 30, "bob": 25}
+
+ages["charlie"] = 35        # subscript write
+age: int = ages["alice"]     # subscript read
+
+if "bob" in ages:
+    print("found")
+
+for name, age in ages.items():
+    print(name)
+```
+
+Methods: `keys()`, `values()`, `get(k, default)`. The runtime uses string keys and boxed values — the compiler inserts box/unbox calls automatically based on the `dict[K, V]` annotation.
+
+### Strings
+
+String literals are automatically inferred as `MpStr*` — no `str_new()` needed:
+
+```python
+s: str = "hello"
+t: str = s + " world"
+if s == "hello":
+    print(s.upper())         # HELLO
     print(s.contains("ell")) # 1
-    print(s.find("ll"))     # 2
-    print(s.slice(1, 3))    # el
+    print(s.find("ll"))      # 2
+    print(s.slice(1, 3))     # el
+```
+
+F-strings work as expected:
+
+```python
+name: str = "world"
+x: int = 42
+msg: str = f"hello {name}, x={x}"
+pi: float = 3.14159
+formatted: str = f"pi={pi:.4f}"
 ```
 
 Methods: `upper`, `lower`, `len`, `find`, `contains`, `starts_with`, `ends_with`, `slice`, `repeat`, `concat`, `strip`, `lstrip`, `rstrip`, `split(sep)`.
 
 ```python
-words: list = str_new("a,b,c").split(str_new(","))   # 3-element list
-clean: str  = str_new("  hi  ").strip()               # "hi"
-msg:   str  = str_format("x=%d, y=%.2f", 3, 1.5)     # printf-style → str
+words: list = "a,b,c".split(",")           # 3-element list
+clean: str  = "  hi  ".strip()              # "hi"
+msg:   str  = str_format("x=%d", 3)        # printf-style → str
 ```
 
 ### Math
@@ -438,20 +465,22 @@ if path is not None:
 
 ### Memory management
 
-micropy has no garbage collector. Heap-allocated types — `str`, `list[T]`, `dict` — are owned by you and must be freed explicitly.
+micropy has no garbage collector. Heap-allocated types — `str`, `list[T]`, `dict` — are owned by you and must be freed explicitly, or use **auto-defer** (see below).
 
-**`defer`** — runs a cleanup call at the end of the enclosing function, in reverse order, even on early return. This is the idiomatic way to pair allocation with cleanup:
+**`defer`** — runs a cleanup call at the end of the enclosing function, in reverse order, even on early return:
 
 ```python
 def process() -> void:
-    nums: list[int] = list_new()
+    nums: list[int] = [1, 2, 3]
     defer(list_free(nums))          # freed when process() returns
 
-    s: str = str_new("hello")
+    s: str = "hello"
     defer(str_free(s))              # freed after nums (reverse order)
 
     # ... use nums and s freely
 ```
+
+**Auto-defer** — the compiler's escape analysis detects local-only `str`, `list[T]`, and `dict` variables and inserts `defer(free(...))` automatically. If a value is returned or passed to a function that takes ownership, it is classified as escaping and left for you to manage. No annotation needed — it just works for the common case.
 
 Free functions: `list_free(l)`, `str_free(s)`, `dict_free(d)`.
 
