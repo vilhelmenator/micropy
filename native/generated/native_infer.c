@@ -1,4 +1,4 @@
-/* mpy_stamp: 1774530501.865886 */
+/* mpy_stamp: 1774537110.050330 */
 #include "micropy_rt.h"
 #include "native_infer.h"
 
@@ -8,18 +8,6 @@ MpStr* native_infer__strip_ptr(const MpStr* t);
 int64_t native_infer__ends_with_star(const MpStr* t);
 MpStr* native_infer__binop_method_name(uint8_t op);
 int main(void);
-
-int64_t native_infer__ends_with_star(const MpStr* t) {
-    "Check if type string ends with '*'.";
-    if ((t == NULL)) {
-        return 0;
-    }
-    int64_t len = mp_str_len(t);
-    if (((len > 0) && (((uint8_t)(t->data[(len - 1)])) == 42))) {
-        return 1;
-    }
-    return 0;
-}
 
 MpStr* native_infer__strip_ptr(const MpStr* t) {
     "Strip trailing * and whitespace: 'Vec3*' → 'Vec3', 'const int*' → 'const int'.";
@@ -132,6 +120,18 @@ MpStr* native_infer__binop_method_name(uint8_t op) {
         return mp_str_new("__mod__");
     }
     return NULL;
+}
+
+int64_t native_infer__ends_with_star(const MpStr* t) {
+    "Check if type string ends with '*'.";
+    if ((t == NULL)) {
+        return 0;
+    }
+    int64_t len = mp_str_len(t);
+    if (((len > 0) && (((uint8_t)(t->data[(len - 1)])) == 42))) {
+        return 1;
+    }
+    return 0;
 }
 
 MpStr* native_infer_native_infer_type(CompilerState* restrict s, AstNode* restrict node) {

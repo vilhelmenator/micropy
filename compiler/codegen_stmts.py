@@ -1600,7 +1600,16 @@ class StmtMixin:
 
     def compile_return(self, node: ast.Return):
         if node.value:
-            val = self.compile_expr(node.value)
+            # String literal in return: must heap-allocate (stack compound literal
+            # would be dangling after the function returns)
+            if (isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)
+                    and self.current_func_ret_type == "MpStr*"):
+                s = node.value.value
+                escaped = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+                val = f'mp_str_new("{escaped}")'
+            else:
+                val = self.compile_expr(node.value)
             if isinstance(node.value, ast.Tuple):
                 ret_struct = self._current_ret_type()
                 # Check if any field in the tuple struct is an array (needs memcpy)

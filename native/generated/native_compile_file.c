@@ -1,4 +1,4 @@
-/* mpy_stamp: 1774530643.171905 */
+/* mpy_stamp: 1774537280.402958 */
 #include "micropy_rt.h"
 #include "native_compile_file.h"
 

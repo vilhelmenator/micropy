@@ -8,7 +8,7 @@ from typing import Optional
 
 from compiler.type_map import TYPE_MAP, ALIAS_MAP, TUPLE_RET_MAP, map_type, mangle_type, get_array_info, get_typed_list_elem, gen_typed_list, get_funcptr_info
 import compiler.type_map as _type_map_mod
-from compiler.codegen_stmts import StmtMixin, _ALLOC_FUNCS, _FREE_FUNCS, _ptr_is_written
+from compiler.codegen_stmts import StmtMixin, _ALLOC_FUNCS, _RAW_ALLOC_FUNCS, _FREE_FUNCS, _ptr_is_written
 from compiler.codegen_exprs import ExprMixin
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -823,6 +823,24 @@ class Compiler(StmtMixin, ExprMixin):
         # Skip vars the compiler already auto-frees or that legitimately escape
         classify = self._escape_classify(func_node)
         skip_vars = {v for v, st in classify.items() if st in ("local_only", "escaping")}
+        # Also skip vars allocated via raw alloc functions (alloc, alloc_safe, mp_alloc).
+        # These are either alloca-substituted (stack, no free needed) or get a
+        # conditional alloca/malloc with auto-free already handled by codegen.
+        for _node in ast.walk(func_node):
+            if (isinstance(_node, ast.Assign)
+                    and len(_node.targets) == 1
+                    and isinstance(_node.targets[0], ast.Name)
+                    and isinstance(_node.value, ast.Call)
+                    and isinstance(_node.value.func, ast.Name)
+                    and _node.value.func.id in _RAW_ALLOC_FUNCS):
+                skip_vars.add(_node.targets[0].id)
+            elif (isinstance(_node, ast.AnnAssign)
+                    and isinstance(_node.target, ast.Name)
+                    and _node.value
+                    and isinstance(_node.value, ast.Call)
+                    and isinstance(_node.value.func, ast.Name)
+                    and _node.value.func.id in _RAW_ALLOC_FUNCS):
+                skip_vars.add(_node.target.id)
 
         def warn_leak(lineno: int, var: str, alloc_info) -> None:
             alloc_line, producer = alloc_info

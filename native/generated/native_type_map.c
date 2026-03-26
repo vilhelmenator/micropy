@@ -1,4 +1,4 @@
-/* mpy_stamp: 1774477395.059091 */
+/* mpy_stamp: 1774537110.050692 */
 #include "micropy_rt.h"
 #include "native_type_map.h"
 

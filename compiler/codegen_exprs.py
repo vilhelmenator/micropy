@@ -3,14 +3,37 @@ import sys
 
 from compiler.type_map import TYPE_MAP, mangle_type
 
-# str_* functions whose MpStr* arguments accept bare string literals via auto-coercion
-_STR_OBJ_FUNCS = frozenset({
-    "str_len", "str_eq", "str_concat", "str_free",
-    "str_contains", "str_starts_with", "str_ends_with",
-    "str_slice", "str_find", "str_upper", "str_lower",
-    "str_repeat", "str_strip", "str_lstrip", "str_rstrip",
-    "str_split", "print_str",
-})
+# Builtin function parameter types — enables auto-coercion of string literals
+# to stack MpStr* compound literals in any call position where the param is MpStr*.
+_BUILTIN_PARAM_TYPES: dict[str, list[str]] = {
+    "str_len": ["MpStr*"],
+    "str_eq": ["MpStr*", "MpStr*"],
+    "str_concat": ["MpStr*", "MpStr*"],
+    "str_free": ["MpStr*"],
+    "str_contains": ["MpStr*", "MpStr*"],
+    "str_starts_with": ["MpStr*", "MpStr*"],
+    "str_ends_with": ["MpStr*", "MpStr*"],
+    "str_slice": ["MpStr*", "int64_t", "int64_t"],
+    "str_find": ["MpStr*", "MpStr*"],
+    "str_upper": ["MpStr*"],
+    "str_lower": ["MpStr*"],
+    "str_repeat": ["MpStr*", "int64_t"],
+    "str_strip": ["MpStr*"],
+    "str_lstrip": ["MpStr*"],
+    "str_rstrip": ["MpStr*"],
+    "str_split": ["MpStr*", "MpStr*"],
+    "str_new": ["const char*"],
+    "str_from_int": ["int64_t"],
+    "str_from_float": ["double"],
+    "str_format": ["const char*"],  # variadic, but first arg is char*
+    "print_str": ["MpStr*"],
+    "print_int": ["int64_t"],
+    "print_float": ["double"],
+    "print_bool": ["int"],
+    "val_str": ["MpStr*"],
+    "file_write_str": ["MpFile", "MpStr*"],
+    "write_text": ["MpWriter*", "MpStr*"],
+}
 
 
 class ExprMixin:
@@ -455,17 +478,6 @@ class ExprMixin:
         "isnan": "isnan", "isinf": "isinf",
     }
 
-    def _coerce_to_str_obj(self, arg_node, compiled: str) -> str:
-        """If arg_node is a string literal, wrap as a stack MpStr*; else return compiled as-is.
-
-        This is used for str_* function arguments: passing "hello" directly to str_len(),
-        str_eq(), etc. auto-produces a block-scope compound literal instead of a malloc.
-        """
-        if isinstance(arg_node, ast.Constant) and isinstance(arg_node.value, str):
-            s = arg_node.value
-            escaped = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-            return f'(&(MpStr){{.data=(char*)"{escaped}",.len={len(s)}}})'
-        return compiled
 
     def compile_call(self, node: ast.Call) -> str:
         # Constant specialization: if this call was mapped to a specialized callee, use it
@@ -491,16 +503,17 @@ class ExprMixin:
 
         args = [self.compile_expr(a) for a in node.args]
 
-        # Auto-coerce string literal arguments to MpStr* when the callee expects it.
-        # Check each arg: if it's a string constant and the corresponding param
-        # type is MpStr*, wrap it as a stack compound literal.
+        # Auto-coerce string literal arguments to MpStr* compound literals.
+        # Uses param type info from: user functions, struct methods, builtins.
+        # Only coerce when we positively know the param type is MpStr*.
         if isinstance(node.func, ast.Name):
             _callee = node.func.id
-            # Look up callee param types (works for user functions and struct methods)
             _ptypes = self.func_param_types.get(_callee)
             if _ptypes is None and _callee in self.from_imports:
                 _mod, _real = self.from_imports[_callee]
                 _ptypes = self.func_param_types.get(f"{_mod}_{_real}")
+            if _ptypes is None:
+                _ptypes = _BUILTIN_PARAM_TYPES.get(_callee)
             if _ptypes:
                 for _pi, _arg_node in enumerate(node.args):
                     if (_pi < len(_ptypes)
@@ -606,16 +619,11 @@ class ExprMixin:
             if fname == "thread_spawn" and len(node.args) >= 2:
                 return self._compile_thread_spawn(node)
 
-            # str_* functions: suppress str_free on literal vars; coerce string constants
-            # to stack MpStr* compound literals so "hello" works without str_new().
-            if fname in _STR_OBJ_FUNCS:
-                if fname == "str_free" and len(node.args) == 1:
-                    a = node.args[0]
-                    if isinstance(a, ast.Name) and a.id in self._str_literal_vars:
-                        return "((void)0)"
-                coerced = [self._coerce_to_str_obj(a, c)
-                           for a, c in zip(node.args, args)]
-                arg_str = ", ".join(coerced)
+            # str_free on literal vars is a no-op (stack-allocated, not heap)
+            if fname == "str_free" and len(node.args) == 1:
+                a = node.args[0]
+                if isinstance(a, ast.Name) and a.id in self._str_literal_vars:
+                    return "((void)0)"
 
             # Built-in mappings
             builtins = {
