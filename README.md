@@ -34,6 +34,7 @@ python3 cli/mpy.py build.mpy                              # run a project build 
 python3 cli/mpy.py program.mpy --watch                    # rebuild on save
 python3 cli/mpy.py program.mpy --flags="-O2 -march=native"   # extra compiler/linker flags
 python3 cli/mpy.py program.mpy --flags="-lssl -lz"           # link extra libraries
+python3 cli/mpy.py program.mpy --safe                            # enable runtime safety checks
 python3 cli/mpy.py program.mpy --no-line-directives           # omit #line directives from C output
 python3 cli/snekc.py                                          # interactive REPL
 ```
@@ -574,11 +575,11 @@ The loop is split evenly across `threads` worker threads using `mp_parallel_for`
 ```python
 @platform("windows")
 def sep() -> str:
-    return str_new("\\")
+    return "\\"
 
 @platform("linux", "macos")
 def sep() -> str:
-    return str_new("/")
+    return "/"
 ```
 
 Only the body matching the current platform is compiled. Multiple platforms can be listed. Valid values: `"windows"`, `"linux"`, `"macos"`.
@@ -1007,6 +1008,56 @@ def process(arr: ptr[int], n: int) -> int:
 
 **Threshold:** up to 3 distinct constant combinations per callee are specialized freely (one copy each, negligible code size). Beyond 3 distinct combinations, specialization proceeds only for callees with ≤ 30 statements. Functions inside `@hot` or `@unroll` contexts are always eligible.
 
+## Safety checks
+
+`--safe` enables runtime safety checks. All checks are gated behind `#ifdef MP_SAFE` so there is zero overhead when compiling without the flag.
+
+```sh
+python3 cli/mpy.py program.mpy --safe          # compile with safety checks
+python3 cli/mpy.py program.mpy --safe --run     # compile and run
+```
+
+### Division by zero
+
+Integer `/` and `%` are wrapped with a check that aborts with file and line info instead of triggering undefined behavior:
+
+```python
+x: int = a / b   # aborts with "division by zero at file.mpy:3" if b == 0
+```
+
+### Integer overflow
+
+`+`, `-`, `*` on integers use `__builtin_*_overflow` to detect wrapping:
+
+```python
+big: int = 9223372036854775807
+result: int = big + 1   # aborts with "integer overflow at file.mpy:2"
+```
+
+### Out-of-bounds access
+
+Array subscripts are bounds-checked at runtime:
+
+```python
+arr: array[int, 4] = {1, 2, 3, 4}
+x: int = arr[10]   # aborts with "index 10 out of bounds [0, 4) at file.mpy:2"
+```
+
+### Null pointer dereference
+
+**Static analysis (always on):** The compiler tracks null/non-null/unknown state for every `ptr[T]` variable through assignments and `if`/`while` guards. Provably-null dereferences are compile errors — no flag needed.
+
+**Runtime checks (under `--safe`):** Where the compiler cannot prove a pointer is non-null (state is `unknown`), it emits a null check before the dereference:
+
+```python
+p: ptr[int] = find_item(key)
+# compiler doesn't know if find_item returns null
+x: int = deref(p)   # under --safe: aborts if p is NULL
+
+if p is not None:
+    x = deref(p)     # no check — compiler proved non-null in this branch
+```
+
 ## Benchmark
 
 ### Python vs micropy
@@ -1056,21 +1107,23 @@ python3 run_opts.py
 
 ## Bootstrap performance
 
-The native compiler is written in micropy and compiles itself. Self-compilation benchmark — the native compiler compiling its own 8 source modules (3,380 lines) to C:
+The native compiler is written in micropy and compiles itself. Self-compilation benchmark — the native compiler compiling its own 8 source modules (~3,900 lines) to C:
 
 | Module | Python | Native | Speedup |
 |--------|--------|--------|---------|
-| native_analysis.mpy | 117.9 ms | 0.20 ms | 595x |
-| native_compile_file.mpy | 459.1 ms | 0.78 ms | 587x |
-| native_infer.mpy | 124.2 ms | 0.26 ms | 478x |
-| native_type_map.mpy | 124.0 ms | 0.28 ms | 438x |
-| native_codegen_stmt.mpy | 347.6 ms | 1.01 ms | 344x |
-| native_codegen_call.mpy | 247.2 ms | 0.85 ms | 290x |
-| native_codegen_expr.mpy | 190.5 ms | 0.66 ms | 289x |
-| native_compiler_state.mpy | 35.5 ms | 0.14 ms | 253x |
-| **Total** | **1,646 ms** | **4.18 ms** | **394x** |
+| native_analysis.mpy | 134 ms | 0.20 ms | 653x |
+| native_compile_file.mpy | 581 ms | 1.26 ms | 459x |
+| native_infer.mpy | 139 ms | 0.25 ms | 559x |
+| native_type_map.mpy | 138 ms | 0.31 ms | 450x |
+| native_codegen_stmt.mpy | 360 ms | 1.12 ms | 323x |
+| native_codegen_call.mpy | 287 ms | 0.96 ms | 301x |
+| native_codegen_expr.mpy | 218 ms | 0.76 ms | 287x |
+| native_compiler_state.mpy | 41 ms | 0.15 ms | 279x |
+| **Total** | **1,898 ms** | **5.00 ms** | **380x** |
 
-The native compiler compiles all 3,380 lines of its own source in under 5 milliseconds. Total compile time becomes dominated by `gcc`, which is the correct steady state — the compiler should never be slower than the C compiler it feeds.
+The native compiler compiles ~3,900 lines of its own source in 5 milliseconds. Total compile time becomes dominated by `gcc`, which is the correct steady state — the compiler should never be slower than the C compiler it feeds.
+
+Run `python3 scripts/benchmark.py` to reproduce.
 
 See [BOOTSTRAP.md](BOOTSTRAP.md) for the full bootstrap roadmap and architecture.
 
@@ -1101,7 +1154,7 @@ micropy/
     micropy_rt.h                      Full runtime: strings, lists, dicts, I/O, concurrency
     micropy_types.h                   Forward declarations — safe to include from any header
     micropy_test.h                    Test runner infrastructure
-  native/                           Bootstrap native compiler (394x faster)
+  native/                           Bootstrap native compiler (380x faster)
     src/                              .mpy source for the native compiler
     generated/                        Pre-generated .c/.h — just run make
   lib/
@@ -1111,7 +1164,7 @@ micropy/
     bootstrap_test.py                 Bootstrap verification
   build/                            Build artifacts (gitignored)
     compiler_native.dylib             Native compiler shared library
-  tests/                            Test suite (43 tests)
+  tests/                            Test suite (45 tests)
   bench/                            Benchmarks
   examples/                         Example programs
 ```
