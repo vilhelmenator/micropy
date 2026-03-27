@@ -1,6 +1,6 @@
 # nathra
 
-A typed systems language in valid Python syntax that compiles to portable C. It preserves enough source structure for aggressive compile-time rewrites that conventional C compilers cannot recover from handwritten C.
+A typed systems language in valid Python syntax that compiles to portable C. It preserves enough source structure for compile-time rewrites that a downstream C compiler usually cannot recover from handwritten C.
 
 ```python
 @soa
@@ -16,7 +16,7 @@ def update(particles: array[Particle, 1024], dt: float) -> void:
         particles[i].y += particles[i].vy * dt
 ```
 
-`@soa` expands the struct array into per-field flat arrays. The loop reads only `x`, `vx`, `y`, `vy` — four contiguous streams instead of striding through a 32-byte struct. The compiler preserves this structure; a C compiler seeing the equivalent handwritten code cannot recover it.
+`@soa` expands the array into per-field flat arrays. The loop reads four contiguous streams instead of striding through a 32-byte struct. This preserves layout information explicitly, instead of hoping a downstream C compiler can reconstruct it from handwritten array-of-structs code.
 
 ## Quick start
 
@@ -33,7 +33,7 @@ python3 cli/snekc.py                          # interactive REPL
 
 ## What makes it different
 
-**Source-aware optimizations.** The compiler sees the full program AST and applies rewrites that a C compiler cannot recover from flat C: `restrict` inference on non-aliasing pointers, `@soa` struct-of-arrays transformation, hot/cold code splitting, constant specialization, alloca substitution for small allocations, and stack variable lifetime narrowing. These are the transforms that justify writing nathra instead of C.
+**Source-aware optimizations.** The compiler sees the full program AST and applies rewrites that a downstream C compiler usually cannot recover from flat C: `restrict` inference on non-aliasing pointers, `@soa` struct-of-arrays transformation, hot/cold code splitting, constant specialization, alloca substitution for small allocations, and stack variable lifetime narrowing. These are the transforms that justify writing nathra instead of C.
 
 **Python syntax, C semantics.** Valid Python syntax means Python-aware editors can parse and highlight it, and the language is easy for humans and LLMs to read and write without learning a new grammar. But the semantics are C-level: no garbage collector, no Python runtime, no Python object model. Structs are value types. Pointers are explicit. You control the memory layout.
 
@@ -41,7 +41,7 @@ python3 cli/snekc.py                          # interactive REPL
 
 **Automatic cleanup for local allocations.** The compiler's escape analysis detects local-only `str`, `list[T]`, and `dict` variables and inserts cleanup automatically. When you need more control, escalate to `defer`, `own[T]`, scoped arenas, or raw `alloc`/`free`.
 
-**Safety checks.** `--safe` enables division-by-zero, bounds, overflow, and null pointer checks — all gated behind a single `#define`, zero overhead in release builds. Static null analysis catches provably-null dereferences as compile errors with no flag needed.
+**Safety checks.** `--safe` enables division-by-zero, bounds, overflow, and null pointer checks — all gated behind a single `#define`, disabled entirely in non-`--safe` builds. Static null analysis catches provably-null dereferences as compile errors with no flag needed.
 
 **C library integration.** `import glut` maps to C headers via the build system. The compiler runs `gcc -E` at compile time to extract every function signature and `#define` constant. No manual extern declarations.
 
