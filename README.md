@@ -3,25 +3,20 @@
 A typed systems language in valid Python syntax that compiles to portable C. It preserves enough source structure for aggressive compile-time rewrites that conventional C compilers cannot recover from handwritten C.
 
 ```python
-import glut
-
+@soa
 struct Particle:
     x: float
     y: float
     vx: float
     vy: float
 
-def update(particles: ptr[Particle], n: int, dt: float) -> void:
-    for i in range(n):
+def update(particles: array[Particle, 1024], dt: float) -> void:
+    for i in range(1024):
         particles[i].x += particles[i].vx * dt
         particles[i].y += particles[i].vy * dt
-
-def main() -> int:
-    glutInitDisplayMode(GLUT_DOUBLE + GLUT_RGB + GLUT_DEPTH)
-    glutCreateWindow("nathra")
-    glutMainLoop()
-    return 0
 ```
+
+`@soa` expands the struct array into per-field flat arrays. The loop reads only `x`, `vx`, `y`, `vy` — four contiguous streams instead of striding through a 32-byte struct. The compiler preserves this structure; a C compiler seeing the equivalent handwritten code cannot recover it.
 
 ## Quick start
 
@@ -40,11 +35,11 @@ python3 cli/snekc.py                          # interactive REPL
 
 **Source-aware optimizations.** The compiler sees the full program AST and applies rewrites that a C compiler cannot recover from flat C: `restrict` inference on non-aliasing pointers, `@soa` struct-of-arrays transformation, hot/cold code splitting, constant specialization, alloca substitution for small allocations, and stack variable lifetime narrowing. These are the transforms that justify writing nathra instead of C.
 
-**Python syntax, C semantics.** Valid Python syntax means any editor, linter, or LLM can read and write it without learning a new grammar. But the semantics are C-level: no garbage collector, no runtime, no object model. Structs are value types. Pointers are explicit. You control the memory layout.
+**Python syntax, C semantics.** Valid Python syntax means Python-aware editors can parse and highlight it, and the language is easy for humans and LLMs to read and write without learning a new grammar. But the semantics are C-level: no garbage collector, no Python runtime, no Python object model. Structs are value types. Pointers are explicit. You control the memory layout.
 
 **Portable C output.** The compiler emits readable, auditable C. You can inspect it, diff it, feed it to any C compiler on any platform. No LLVM dependency, no custom backend.
 
-**Automatic memory management (opt-out, not opt-in).** The default mode is auto-defer: the compiler's escape analysis detects local-only allocations and inserts cleanup automatically. When you need more control, escalate to `defer`, `own[T]`, scoped arenas, or raw `alloc`/`free`.
+**Automatic cleanup for local allocations.** The compiler's escape analysis detects local-only `str`, `list[T]`, and `dict` variables and inserts cleanup automatically. When you need more control, escalate to `defer`, `own[T]`, scoped arenas, or raw `alloc`/`free`.
 
 **Safety checks.** `--safe` enables division-by-zero, bounds, overflow, and null pointer checks — all gated behind a single `#define`, zero overhead in release builds. Static null analysis catches provably-null dereferences as compile errors with no flag needed.
 
@@ -55,7 +50,7 @@ python3 cli/snekc.py                          # interactive REPL
 | Tier | Features |
 |------|----------|
 | **Stable** | Types, structs, enums, functions, modules, control flow, C emission, lists, dicts, strings, f-strings, defer, auto-defer, error handling (`Result[T]`), testing framework, build system, native bootstrap compiler |
-| **Solid** | Safety checks (`--safe`), `@soa`, `@hot`/`@cold`, serialization (`@serializable`), SIMD, concurrency (threads, mutexes, channels), hot-reload, REPL, codegen hooks, `c_import` |
+| **Implemented** | Safety checks (`--safe`), `@soa`, `@hot`/`@cold`, serialization (`@serializable`), SIMD, concurrency (threads, mutexes, channels), hot-reload, REPL, codegen hooks, `c_import` |
 | **New** | `own[T]` ownership tracking, scoped arenas (`with scope`), heap assertions, `c_modules` build integration |
 
 ## Non-goals
@@ -63,11 +58,11 @@ python3 cli/snekc.py                          # interactive REPL
 - **Not Python-compatible.** No Python runtime, no Python object model, no Python import semantics. This is a C-level systems language that borrows Python's syntax.
 - **Not memory-safe by default.** Raw pointer access is allowed. `--safe` adds runtime checks; `own[T]` adds compile-time ownership enforcement. Neither is mandatory.
 - **Not aiming for C++ abstraction complexity.** No templates, no RAII, no move constructors, no exceptions. Nathra is closer to "typed C with Python syntax" than to Rust or C++.
-- **Not hiding C-level costs.** Every operation has a predictable cost. There are no hidden allocations, no implicit copies, no virtual dispatch.
+- **Not hiding C-level costs.** Nathra does not hide costs behind a VM, GC, or dynamic dispatch. Heap-allocating types such as `str`, `list`, and `dict` remain explicit in the source.
 
 ## Memory model
 
-The default is **auto-defer**: local-only `str`, `list[T]`, and `dict` variables are freed automatically when the function returns. You write allocations; the compiler handles cleanup.
+The default is **auto-defer**: local-only `str`, `list[T]`, and `dict` variables are cleaned up automatically when the function returns. You write allocations; the compiler inserts the frees.
 
 When auto-defer isn't enough, escalate:
 
@@ -88,7 +83,7 @@ with scope(arena, 65536):
 
 # 4. Raw control — escape hatch
 p: ptr[int] = alloc(8)
-deref(p, 42)
+p[0] = 42
 free(p)
 ```
 
