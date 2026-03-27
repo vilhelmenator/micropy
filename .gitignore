@@ -22,6 +22,9 @@ bench/*.c
 bench/*.h
 bench/*.dSYM/
 
+# Auto-generated type stubs from c_import
+*.pyi
+
 # macOS debug symbol bundles
 *.dSYM/
 

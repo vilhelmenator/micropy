@@ -207,6 +207,15 @@ def build_once(args, source_dir) -> bool:
         if not os.path.exists(_dst) or os.path.getmtime(_src) >= os.path.getmtime(_dst):
             shutil.copy2(_src, _dst)
 
+    # Parse --c-module flags: "name=<header1>,<header2>"
+    c_modules = {}
+    for spec in getattr(args, 'c_module', []):
+        if "=" not in spec:
+            print(f"Error: --c-module must be NAME=HEADERS, got: {spec}", file=sys.stderr)
+            return False
+        name, hdrs = spec.split("=", 1)
+        c_modules[name.strip()] = [h.strip() for h in hdrs.split(",")]
+
     compiler = Compiler(
         source_dir=source_dir,
         platform=args.platform,
@@ -215,6 +224,7 @@ def build_once(args, source_dir) -> bool:
         safe_mode=getattr(args, 'safe', False),
         reorder_funcs=getattr(args, 'reorder_funcs', False),
         call_graph_report=getattr(args, 'call_graph', False),
+        c_modules=c_modules,
     )
     try:
         c_src, h_src, mod_info = compiler.compile_file(args.source, "__main__")
@@ -324,6 +334,9 @@ def main():
                         help="Reorder functions by call-graph weight for I-cache locality")
     parser.add_argument("--call-graph", action="store_true",
                         help="Print weighted call graph report (no reordering)")
+    parser.add_argument("--c-module", action="append", default=[],
+                        metavar="NAME=HEADER",
+                        help='Map import name to C header(s): --c-module "glut=<GLUT/glut.h>,<OpenGL/gl.h>"')
     args = parser.parse_args()
 
     # Route build.mpy to the build system

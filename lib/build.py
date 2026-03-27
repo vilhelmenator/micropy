@@ -10,6 +10,46 @@ from compiler import Compiler, CompileError
 _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _detect_platform() -> str:
+    """Detect the current platform as 'macos', 'linux', or 'windows'."""
+    if sys.platform == "darwin":
+        return "macos"
+    elif sys.platform == "win32":
+        return "windows"
+    return "linux"
+
+
+def _resolve_platform(value, platform: str):
+    """Resolve a platform-keyed dict or return value as-is.
+
+    Accepts:
+      - A plain list/str: returned unchanged
+      - A dict with platform keys: resolves to the matching entry
+        e.g. {"macos": [...], "linux": [...]} → [...]
+    """
+    if isinstance(value, dict):
+        # Check for platform keys (not c_module names like "glut")
+        if platform in value:
+            return value[platform]
+        if "all" in value:
+            return value["all"]
+        return []
+    return value
+
+
+def _resolve_c_modules(c_modules: dict, platform: str) -> dict:
+    """Resolve platform-keyed c_modules entries.
+
+    Input:  {"glut": {"macos": ["<GLUT/glut.h>"], "linux": ["<GL/glut.h>"]},
+             "sdl": ["<SDL2/SDL.h>"]}
+    Output: {"glut": ["<GLUT/glut.h>"], "sdl": ["<SDL2/SDL.h>"]}
+    """
+    resolved = {}
+    for name, headers in c_modules.items():
+        resolved[name] = _resolve_platform(headers, platform)
+    return resolved
+
+
 # ---------------------------------------------------------------------------
 # Build target definitions
 # ---------------------------------------------------------------------------
@@ -23,6 +63,7 @@ class BuildTarget:
     libs: List[str] = field(default_factory=list)
     deps: List[str] = field(default_factory=list)  # other lib target names
     run: bool = False  # run after linking (useful for test binaries)
+    c_modules: dict = field(default_factory=dict)  # module_name → [header_paths]
 
 
 # ---------------------------------------------------------------------------
@@ -41,28 +82,35 @@ class BuildRunner:
 
     def exe(self, name: str, sources: List[str],
             flags: List[str] = None, libs: List[str] = None,
-            deps: List[str] = None, run: bool = False):
+            deps: List[str] = None, run: bool = False,
+            c_modules: dict = None):
         self.targets.append(BuildTarget(
             name=name, sources=sources, kind="exe",
             flags=flags or [], libs=libs or [], deps=deps or [],
-            run=run,
+            run=run, c_modules=c_modules or {},
         ))
 
     def lib(self, name: str, sources: List[str], kind: str = "static",
-            flags: List[str] = None, libs: List[str] = None):
+            flags: List[str] = None, libs: List[str] = None,
+            c_modules: dict = None):
         if kind not in ("static", "shared"):
             print(f"Error: lib kind must be 'static' or 'shared', got '{kind}'", file=sys.stderr)
             sys.exit(1)
         self.targets.append(BuildTarget(
             name=name, sources=sources, kind=kind,
             flags=flags or [], libs=libs or [],
+            c_modules=c_modules or {},
         ))
 
     # -- Execution -----------------------------------------------------------
 
     def run(self):
         run_results = []  # (name, passed) for targets with run=True
+        _plat = _detect_platform()
         for target in self.targets:
+            # Resolve platform-keyed flags
+            if isinstance(target.flags, dict):
+                target.flags = _resolve_platform(target.flags, _plat)
             print(f"\n==> {target.kind}: {target.name}")
             c_files, any_recompiled = self._compile_sources(target)
             if target.kind == "exe":
@@ -134,10 +182,15 @@ class BuildRunner:
             module_name = "__main__" if target.kind == "exe" and src == target.sources[0] else \
                           os.path.splitext(os.path.basename(src))[0]
 
+            # Resolve platform-keyed c_modules
+            _plat = _detect_platform()
+            _resolved_mods = _resolve_c_modules(target.c_modules, _plat)
+
             compiler = Compiler(
                 compiled_files=compiled_files,
                 source_dir=self.build_dir,
                 platform=self.platform,
+                c_modules=_resolved_mods,
             )
             try:
                 c_src, h_src, mod_info = compiler.compile_file(src_path, module_name)

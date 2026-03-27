@@ -98,6 +98,7 @@ class Compiler(StmtMixin, ExprMixin):
     test_funcs: list = field(default_factory=list)   # names of @test functions
     c_includes: list = field(default_factory=list)    # c_include() calls at module level
     _extern_funcs: set = field(default_factory=set)   # names of @extern functions
+    _c_import_constants: dict = field(default_factory=dict)  # name → int value from c_import
     _variadic_funcs: set = field(default_factory=set)  # names of variadic functions (have *args)
     _fstr_counter: int = 0                            # unique suffix for f-string buffers
     _lc_counter: int = 0                              # unique suffix for list comprehension temps
@@ -139,6 +140,7 @@ class Compiler(StmtMixin, ExprMixin):
     backref_fields: set = field(default_factory=set)         # (struct_name, field_name) pairs
     codegen_hooks: dict = field(default_factory=dict)        # func_name → (module_path, hook_name, args, kwargs)
     _py_imports: set = field(default_factory=set)            # module names imported from .py files
+    c_modules: dict = field(default_factory=dict)            # module_name → [header_paths] from build config
 
     def emit(self, line=""):
         prefix = "    " * self.indent
@@ -284,6 +286,214 @@ class Compiler(StmtMixin, ExprMixin):
         "mp_str_new", "str_new", "mp_list_new", "mp_dict_new",
         "channel_new", "mutex_new", "cond_new", "pool_new",
     })
+
+    # ── c_import: extract functions and constants from C headers ────────
+
+    # Map C types from headers to nathra C types
+    _C_TYPE_MAP = {
+        "void": "void", "int": "int", "unsigned int": "unsigned int",
+        "int8_t": "int8_t", "int16_t": "int16_t", "int32_t": "int32_t", "int64_t": "int64_t",
+        "uint8_t": "uint8_t", "uint16_t": "uint16_t", "uint32_t": "uint32_t", "uint64_t": "uint64_t",
+        "float": "float", "double": "double", "char": "char",
+        "char*": "char*", "const char*": "const char*",
+        "size_t": "size_t", "ssize_t": "ssize_t",
+    }
+
+    def _c_import_header(self, header: str, mod_info) -> None:
+        """Run gcc -E on a C header and extract function declarations and #define constants."""
+        import subprocess, re
+
+        # Build include string
+        src = f'#include {header}\n' if header.startswith("<") else f'#include "{header}"\n'
+
+        # Step 1: Extract typedefs to map library types → C types
+        type_aliases: dict[str, str] = {}
+        try:
+            result = subprocess.run(
+                ["gcc", "-E", "-x", "c", "-"],
+                input=src, capture_output=True, text=True, timeout=10,
+            )
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                m = re.match(r'^typedef\s+(\w+)\s+(\w+)\s*;', line)
+                if m:
+                    base, alias = m.group(1), m.group(2)
+                    type_aliases[alias] = base
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            print(f"warning: c_import: gcc -E failed for {header}", file=sys.stderr)
+            return
+
+        def resolve_c_type(t: str) -> str:
+            """Resolve a C type to nathra's type system."""
+            t = t.strip()
+            # Strip pointer suffix
+            ptr_depth = 0
+            while t.endswith("*"):
+                t = t[:-1].strip()
+                ptr_depth += 1
+            # Resolve typedefs
+            while t in type_aliases:
+                t = type_aliases[t]
+            # Map to known types
+            mapped = self._C_TYPE_MAP.get(t, t)
+            for _ in range(ptr_depth):
+                mapped += "*"
+            return mapped
+
+        # Step 2: Extract #define integer constants
+        try:
+            result = subprocess.run(
+                ["gcc", "-E", "-dM", "-x", "c", "-"],
+                input=src, capture_output=True, text=True, timeout=10,
+            )
+            for line in result.stdout.splitlines():
+                m = re.match(r'^#define\s+(\w+)\s+(0x[0-9a-fA-F]+|\d+)\s*$', line)
+                if m:
+                    name, val = m.group(1), m.group(2)
+                    # Skip internal/compiler defines
+                    if name.startswith("_") or name.startswith("__"):
+                        continue
+                    ival = int(val, 0)
+                    self._c_import_constants[name] = ival
+                    self._extern_funcs.add(name)  # prevent module prefixing
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+        # Step 3: Extract function declarations
+        try:
+            result = subprocess.run(
+                ["gcc", "-E", "-x", "c", "-"],
+                input=src, capture_output=True, text=True, timeout=10,
+            )
+            # Match: extern <ret> <name> (<params>) [attributes...];
+            # Match: extern <ret> <name> (
+            func_start_re = re.compile(
+                r'^extern\s+(\w[\w\s\*]*?)\s+(\w+)\s*\('
+            )
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                m = func_start_re.match(line)
+                if not m:
+                    continue
+                ret_str, fname = m.group(1), m.group(2)
+                # Extract balanced parameter list after the opening (
+                _paren_start = m.end() - 1  # position of (
+                _depth = 1
+                _pi = m.end()
+                while _pi < len(line) and _depth > 0:
+                    if line[_pi] == '(':
+                        _depth += 1
+                    elif line[_pi] == ')':
+                        _depth -= 1
+                    _pi += 1
+                params_str = line[m.end():_pi - 1]
+                ret_type = resolve_c_type(ret_str)
+
+                # Parse parameters
+                args = []
+                if params_str.strip() and params_str.strip() != "void":
+                    # Split on commas but respect parentheses (function pointers)
+                    _depth = 0
+                    _parts = []
+                    _cur = []
+                    for ch in params_str:
+                        if ch == '(':
+                            _depth += 1
+                        elif ch == ')':
+                            _depth -= 1
+                        if ch == ',' and _depth == 0:
+                            _parts.append(''.join(_cur).strip())
+                            _cur = []
+                        else:
+                            _cur.append(ch)
+                    if _cur:
+                        _parts.append(''.join(_cur).strip())
+
+                    for param in _parts:
+                        # Remove __attribute__ and anything after
+                        param = re.sub(r'__attribute__.*', '', param).strip()
+                        if not param:
+                            continue
+                        # Skip function pointer params — treat as void*
+                        if '(' in param:
+                            # Extract name from "void (*name)(...)"
+                            _fp_m = re.search(r'\(\*\s*(\w+)\)', param)
+                            _fp_name = _fp_m.group(1) if _fp_m else f"_fp{len(args)}"
+                            args.append((_fp_name, "void*"))
+                            continue
+                        # Split type and name: "GLfloat x" → ("GLfloat", "x")
+                        parts = param.rsplit(None, 1)
+                        if len(parts) == 2:
+                            ptype_str = parts[0].strip()
+                            pname = parts[1].strip().lstrip("*")
+                            # Handle pointer-in-name: "int *x" → type="int*", name="x"
+                            while parts[1].startswith("*"):
+                                ptype_str += "*"
+                                parts[1] = parts[1][1:]
+                            ptype = resolve_c_type(ptype_str)
+                            args.append((pname, ptype))
+                        else:
+                            args.append(("_", resolve_c_type(param)))
+
+                mod_info.functions[fname] = (ret_type, args)
+                self.func_ret_types[fname] = ret_type
+                self._extern_funcs.add(fname)
+                if args:
+                    self.func_param_types[fname] = [t for _, t in args]
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+    # Map C types to Python-compatible types for .pyi stubs
+    _C_TO_PYI = {
+        "void": "None", "int": "int", "int32_t": "int", "int64_t": "int",
+        "uint8_t": "int", "uint16_t": "int", "uint32_t": "int", "uint64_t": "int",
+        "int8_t": "int", "int16_t": "int",
+        "float": "float", "double": "float", "char": "int",
+        "char*": "str", "const char*": "str",
+        "size_t": "int", "ssize_t": "int",
+        "unsigned int": "int",
+    }
+
+    def _pyi_type(self, ctype: str) -> str:
+        """Convert a C type to Python-compatible type for .pyi stubs."""
+        if ctype in self._C_TO_PYI:
+            return self._C_TO_PYI[ctype]
+        if ctype.endswith("*"):
+            return "Any"
+        return "Any"
+
+    def _write_c_module_stub(self, mod_name: str, mod_info) -> None:
+        """Write a .pyi stub file for a c_module so IDEs can resolve the names."""
+        stub_path = os.path.join(self.source_dir, f"{mod_name}.pyi")
+        lines = [
+            f"# Auto-generated by nathra from c_module '{mod_name}' — do not edit\n",
+            "from typing import Any\n\n",
+        ]
+
+        # Constants
+        for name, val in sorted(self._c_import_constants.items()):
+            lines.append(f"{name}: int = {val}\n")
+
+        if self._c_import_constants:
+            lines.append("\n")
+
+        # Functions
+        for fname in sorted(mod_info.functions):
+            if fname.startswith("_"):
+                continue
+            ret_type, args = mod_info.functions[fname]
+            ret_pyi = self._pyi_type(ret_type)
+            params = []
+            for pname, ptype in args:
+                params.append(f"{pname}: {self._pyi_type(ptype)}")
+            param_str = ", ".join(params)
+            lines.append(f"def {fname}({param_str}) -> {ret_pyi}: ...\n")
+
+        try:
+            with open(stub_path, "w") as f:
+                f.writelines(lines)
+        except OSError:
+            pass  # non-fatal — stubs are optional
 
     def _null_analyze(self, func_node: ast.FunctionDef) -> dict:
         """Analyze nullability of ptr[T] variables in a function.
@@ -1526,10 +1736,26 @@ class Compiler(StmtMixin, ExprMixin):
                     if node.value.func.id == "c_include":
                         if node.value.args and isinstance(node.value.args[0], ast.Constant):
                             self.c_includes.append(node.value.args[0].value)
+                    # c_import("<header.h>") — extract functions and constants from C header
+                    if node.value.func.id == "c_import":
+                        if node.value.args and isinstance(node.value.args[0], ast.Constant):
+                            hdr = node.value.args[0].value
+                            self.c_includes.append(hdr)
+                            self._c_import_header(hdr, mod_info)
                 continue
 
             if isinstance(node, ast.FunctionDef):
                 decs = self.get_decorators(node)
+                # Auto-detect extern: body is just `...` (Ellipsis)
+                _is_ellipsis_body = (
+                    len(node.body) == 1
+                    and isinstance(node.body[0], ast.Expr)
+                    and isinstance(node.body[0].value, ast.Constant)
+                    and node.body[0].value.value is ...
+                )
+                if _is_ellipsis_body and "extern" not in decs:
+                    decs["extern"] = True
+
                 # Store for specialization lookups (skip extern — no visible body)
                 if "extern" not in decs:
                     self._all_func_defs[node.name] = node
@@ -1996,6 +2222,9 @@ class Compiler(StmtMixin, ExprMixin):
                 decs = self.get_decorators(node)
                 if any(d in decs for d in ("extern", "compile_time", "trait", "generic", "test")):
                     continue
+                # Auto-extern: body is just `...`
+                if node.name in self._extern_funcs:
+                    continue
                 if "platform" in decs:
                     plat_info = decs["platform"]
                     plat = plat_info["args"][0] if plat_info.get("args") else "all"
@@ -2025,6 +2254,12 @@ class Compiler(StmtMixin, ExprMixin):
             if isinstance(node, ast.FunctionDef):
                 decs = self.get_decorators(node)
                 if any(d in decs for d in ("extern", "compile_time", "trait")):
+                    continue
+                # Auto-extern: body is just `...`
+                if (len(node.body) == 1
+                        and isinstance(node.body[0], ast.Expr)
+                        and isinstance(node.body[0].value, ast.Constant)
+                        and node.body[0].value.value is ...):
                     continue
                 _emit_funcs.append(node)
 
@@ -3129,6 +3364,22 @@ class Compiler(StmtMixin, ExprMixin):
         for alias in node.names:
             mod_name = alias.name
             if mod_name in self._STDLIB_SKIP:
+                continue
+            # c_modules: import triggers header scan + include emission
+            if mod_name in self.c_modules:
+                if mod_name not in self.compiled_files:
+                    headers = self.c_modules[mod_name]
+                    if isinstance(headers, str):
+                        headers = [headers]
+                    mod_info = self.modules.setdefault(
+                        mod_name, ModuleInfo(name=mod_name)
+                    )
+                    for hdr in headers:
+                        self.c_includes.append(hdr)
+                        self._c_import_header(hdr, mod_info)
+                    self.compiled_files.add(mod_name)
+                    # Generate .pyi stub for IDE/linter support
+                    self._write_c_module_stub(mod_name, mod_info)
                 continue
             if mod_name not in self.compiled_files:
                 self.compile_dependency(mod_name)

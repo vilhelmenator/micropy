@@ -760,6 +760,9 @@ class ExprMixin:
             # cross-module search) so same-named helpers like _emit resolve
             # to the current module's version, not another module's.
             if self.current_module and self.current_module != "__main__":
+                # Extern functions keep their original name (no module prefix)
+                if fname in self._extern_funcs:
+                    return f"{fname}({arg_str})"
                 cur_mod = self.modules.get(self.current_module)
                 if cur_mod and fname in cur_mod.functions:
                     return f"{self.current_module}_{fname}({arg_str})"
@@ -770,6 +773,9 @@ class ExprMixin:
                 if mod_name == self.current_module:
                     continue
                 if fname in mod_info.functions:
+                    # Extern functions (including c_module imports) keep their C name
+                    if fname in self._extern_funcs:
+                        return f"{fname}({arg_str})"
                     return f"{mod_name}_{fname}({arg_str})"
             return f"{fname}({arg_str})"
 

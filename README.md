@@ -35,6 +35,7 @@ python3 cli/mpy.py program.mpy --watch                    # rebuild on save
 python3 cli/mpy.py program.mpy --flags="-O2 -march=native"   # extra compiler/linker flags
 python3 cli/mpy.py program.mpy --flags="-lssl -lz"           # link extra libraries
 python3 cli/mpy.py program.mpy --safe                            # enable runtime safety checks
+python3 cli/mpy.py program.mpy --c-module "gl=<GL/gl.h>"        # import C library by name
 python3 cli/mpy.py program.mpy --no-line-directives           # omit #line directives from C output
 python3 cli/snekc.py                                          # interactive REPL
 ```
@@ -762,6 +763,57 @@ c_include("<unistd.h>")
 def sleep_sec(n: int) -> void:
     c_code("sleep(n);")
 ```
+
+### C library integration
+
+`import` a C library by name — the build system maps it to the right headers for your platform. The compiler runs `gcc -E` at compile time to extract all function signatures and `#define` constants automatically:
+
+```python
+import glut
+
+def main() -> int:
+    glutInitDisplayMode(GLUT_DOUBLE + GLUT_RGB + GLUT_DEPTH)
+    glutCreateWindow("nathra - spinning cube")
+    glEnable(GL_DEPTH_TEST)
+    glutDisplayFunc(display)
+    glutMainLoop()
+    return 0
+```
+
+No `@extern` declarations, no constant blocks — `import glut` gives you every function and `#define` from the headers.
+
+Map module names to headers via the CLI or `build.mpy`:
+
+```sh
+python3 cli/mpy.py program.mpy --c-module "glut=<GLUT/glut.h>,<OpenGL/gl.h>"
+```
+
+```python
+# build.mpy
+exe("cube",
+    sources=["cube.mpy"],
+    c_modules={
+        "glut": {
+            "macos": ["<GLUT/glut.h>", "<OpenGL/gl.h>"],
+            "linux": ["<GL/glut.h>", "<GL/gl.h>"],
+        },
+    },
+    flags={
+        "macos": ["-framework OpenGL", "-framework GLUT"],
+        "linux": ["-lGL", "-lglut", "-lm"],
+    },
+)
+```
+
+Platform-keyed dicts resolve automatically based on the build machine. A `.pyi` stub file is auto-generated for IDE autocomplete and linting (gitignored).
+
+Functions with `...` body are automatically treated as extern — no `@extern` decorator needed:
+
+```python
+def custom_lib_func(x: int, y: float) -> int: ...
+```
+
+See [examples/spinning_cube/](examples/spinning_cube/) for a complete working demo.
 
 ### Concurrency
 
