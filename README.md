@@ -31,13 +31,37 @@ python3 cli/nathra.py build.nth               # run a project build script
 python3 cli/snekc.py                          # interactive REPL
 ```
 
+## Example
+
+```python
+# hello.nth
+struct Vec2:
+    x: float
+    y: float
+
+def length(v: ptr[Vec2]) -> float:
+    return sqrt(v.x * v.x + v.y * v.y)
+
+def main() -> int:
+    v: Vec2 = Vec2(3.0, 4.0)
+    print(length(addr_of(v)))
+    return 0
+```
+
+```sh
+$ python3 cli/nathra.py hello.nth --run
+5.000000
+```
+
+The compiler emits readable C, invokes `gcc`, and runs the binary. Errors point to `hello.nth` line numbers, and `#line` directives let native debuggers map stepping back to the original `.nth` source.
+
 ## What makes it different
 
 **Source-aware optimizations.** The compiler sees the full program AST and applies rewrites that a downstream C compiler usually cannot recover from flat C: `restrict` inference on non-aliasing pointers, `@soa` struct-of-arrays transformation, hot/cold code splitting, constant specialization, alloca substitution for small allocations, and stack variable lifetime narrowing. These are the transforms that justify writing nathra instead of C.
 
 **Python syntax, C semantics.** Valid Python syntax means Python-aware editors can parse and highlight it, and the language is easy for humans and LLMs to read and write without learning a new grammar. But the semantics are C-level: no garbage collector, no Python runtime, no Python object model. Structs are value types. Pointers are explicit. You control the memory layout.
 
-**Portable C output.** The compiler emits readable, auditable C. You can inspect it, diff it, feed it to any C compiler on any platform. No LLVM dependency, no custom backend.
+**Portable C output.** The compiler emits readable, auditable C. You can inspect it, diff it, and feed it to any C compiler on any platform. `#line` directives map compiler diagnostics and native debugger stepping back to the original `.nth` source. No LLVM dependency, no custom backend.
 
 **Automatic cleanup for local allocations.** The compiler's escape analysis detects local-only `str`, `list[T]`, and `dict` variables and inserts cleanup automatically. When you need more control, escalate to `defer`, `own[T]`, scoped arenas, or raw `alloc`/`free`.
 
