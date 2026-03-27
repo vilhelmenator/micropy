@@ -27,6 +27,26 @@ MpStr* native_infer__strip_ptr(const MpStr* t) {
     return t;
 }
 
+MpStr* native_infer__binop_method_name(uint8_t op) {
+    "Map operator tag to __method__ name for operator overloading.";
+    if ((op == OP_ADD)) {
+        return mp_str_new("__add__");
+    }
+    if ((op == OP_SUB)) {
+        return mp_str_new("__sub__");
+    }
+    if ((op == OP_MULT)) {
+        return mp_str_new("__mul__");
+    }
+    if ((op == OP_DIV)) {
+        return mp_str_new("__truediv__");
+    }
+    if ((op == OP_MOD)) {
+        return mp_str_new("__mod__");
+    }
+    return NULL;
+}
+
 MpStr* native_infer_native_infer_call_type(CompilerState* restrict s, const AstNode* restrict node) {
     "Infer the return type of a function call.";
     AstCall* p = node->data;
@@ -100,26 +120,6 @@ MpStr* native_infer_native_infer_call_type(CompilerState* restrict s, const AstN
         }
     }
     return mp_str_new("int64_t");
-}
-
-MpStr* native_infer__binop_method_name(uint8_t op) {
-    "Map operator tag to __method__ name for operator overloading.";
-    if ((op == OP_ADD)) {
-        return mp_str_new("__add__");
-    }
-    if ((op == OP_SUB)) {
-        return mp_str_new("__sub__");
-    }
-    if ((op == OP_MULT)) {
-        return mp_str_new("__mul__");
-    }
-    if ((op == OP_DIV)) {
-        return mp_str_new("__truediv__");
-    }
-    if ((op == OP_MOD)) {
-        return mp_str_new("__mod__");
-    }
-    return NULL;
 }
 
 int64_t native_infer__ends_with_star(const MpStr* t) {

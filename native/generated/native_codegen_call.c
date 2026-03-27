@@ -1,4 +1,4 @@
-/* mpy_stamp: 1774568699.738692 */
+/* mpy_stamp: 1774632879.546870 */
 #include "micropy_rt.h"
 #include "native_codegen_call.h"
 
@@ -251,6 +251,27 @@ MpStr* native_codegen_call_native_compile_call(CompilerState* restrict s, const 
                 free(arg_parts);
             }
             return mp_str_format("mp_test_assert_eq(%s)", arg_str->data);
+        }
+        if (mp_str_eq(fname, (&(MpStr){.data=(char*)"heap_allocated",.len=14}))) {
+            if ((arg_parts != NULL)) {
+                free(arg_parts);
+            }
+            return mp_str_new("mp_heap_allocated()");
+        }
+        if ((mp_str_eq(fname, (&(MpStr){.data=(char*)"heap_assert",.len=11})) && (pc->args.count == 1))) {
+            MpStr* val = native_codegen_expr_native_compile_expr(s, pc->args.items[0]);
+            if ((arg_parts != NULL)) {
+                free(arg_parts);
+            }
+            return mp_str_format("mp_heap_assert(%s, __FILE__, __LINE__)", val->data);
+        }
+        if ((mp_str_eq(fname, (&(MpStr){.data=(char*)"heap_assert_delta",.len=17})) && (pc->args.count == 2))) {
+            MpStr* snap_e = native_codegen_expr_native_compile_expr(s, pc->args.items[0]);
+            MpStr* delta_e = native_codegen_expr_native_compile_expr(s, pc->args.items[1]);
+            if ((arg_parts != NULL)) {
+                free(arg_parts);
+            }
+            return mp_str_format("mp_heap_assert_delta(%s, %s, __FILE__, __LINE__)", snap_e->data, delta_e->data);
         }
         if (strmap_strmap_has((&s->structs), fname)) {
             MpStr* r = native_codegen_call_native_call_struct_ctor(s, fname, arg_str);

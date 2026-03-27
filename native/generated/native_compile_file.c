@@ -1,4 +1,4 @@
-/* mpy_stamp: 1774568699.738692 */
+/* mpy_stamp: 1774633278.559909 */
 #include "micropy_rt.h"
 #include "native_compile_file.h"
 
@@ -6,6 +6,7 @@ void native_compile_file__emit(CompilerState* restrict s, const MpStr* restrict 
 void native_compile_file__emit_raw(CompilerState* restrict s, const MpStr* restrict line);
 void native_compile_file__first_pass(CompilerState* s, AstNodeList body);
 int64_t native_compile_file__has_decorator(const AstFunctionDef* restrict fd, const MpStr* restrict name);
+void native_compile_file__scan_annotation_for_list(CompilerState* restrict s, const AstNode* restrict ann);
 void native_compile_file__scan_typed_lists(CompilerState* s, AstNodeList body);
 void native_compile_file__emit_typed_lists(CompilerState* s);
 int64_t native_compile_file__has_test_funcs(AstNodeList body);
@@ -180,6 +181,41 @@ int64_t native_compile_file__has_decorator(const AstFunctionDef* restrict fd, co
     return 0;
 }
 
+void native_compile_file__scan_annotation_for_list(CompilerState* restrict s, const AstNode* restrict ann) {
+    "Check if an annotation is list[T] or own[list[T]] and register the typed list.";
+    if (((ann == NULL) || (ann->tag != TAG_SUBSCRIPT))) {
+        return;
+    }
+    AstSubscript* asub = ann->data;
+    AstNode* sub_val = asub->value;
+    if (((sub_val != NULL) && (sub_val->tag == TAG_NAME))) {
+        AstName* bn = sub_val->data;
+        if ((mp_str_eq(bn->id, (&(MpStr){.data=(char*)"own",.len=3})) && (asub->slice != NULL) && (asub->slice->tag == TAG_SUBSCRIPT))) {
+            asub = asub->slice->data;
+            sub_val = asub->value;
+        }
+    }
+    if (((sub_val != NULL) && (sub_val->tag == TAG_NAME))) {
+        AstName* bn2 = sub_val->data;
+        if ((mp_str_eq(bn2->id, (&(MpStr){.data=(char*)"typed_list",.len=10})) || mp_str_eq(bn2->id, (&(MpStr){.data=(char*)"list",.len=4})))) {
+            MpStr* elem_t = native_type_map_native_map_type(asub->slice);
+            if ((strmap_strmap_has((&s->typed_lists), elem_t) == 0)) {
+                MpStr* list_name = mp_str_concat(elem_t, (&(MpStr){.data=(char*)"List",.len=4}));
+                if (mp_str_eq(elem_t, (&(MpStr){.data=(char*)"int64_t",.len=7}))) {
+                    list_name = mp_str_new("IntList");
+                } else 
+                if (mp_str_eq(elem_t, (&(MpStr){.data=(char*)"double",.len=6}))) {
+                    list_name = mp_str_new("FloatList");
+                } else 
+                if (mp_str_eq(elem_t, (&(MpStr){.data=(char*)"uint8_t",.len=7}))) {
+                    list_name = mp_str_new("ByteList");
+                }
+                strmap_strmap_set((&s->typed_lists), elem_t, list_name);
+            }
+        }
+    }
+}
+
 void native_compile_file__scan_typed_lists(CompilerState* s, AstNodeList body) {
     "Walk AST to find typed_list[T] annotations and register list types.";
     for (int64_t i = 0; i < body.count; i++) {
@@ -215,6 +251,14 @@ void native_compile_file__scan_typed_lists(CompilerState* s, AstNodeList body) {
         }
         if ((node->tag == TAG_FUNCTION_DEF)) {
             AstFunctionDef* fd = node->data;
+            if ((fd->args != NULL)) {
+                AstArguments* fa = fd->args->data;
+                for (int64_t pi = 0; pi < fa->args.count; pi++) {
+                    AstArg* pa = fa->args.items[pi]->data;
+                    native_compile_file__scan_annotation_for_list(s, pa->annotation);
+                }
+            }
+            native_compile_file__scan_annotation_for_list(s, fd->returns);
             native_compile_file__scan_typed_lists(s, fd->body);
         }
         if ((node->tag == TAG_CLASS_DEF)) {
@@ -502,6 +546,16 @@ void native_compile_file__emit_function_prototypes(CompilerState* s, AstNodeList
             continue;
         }
         MpStr* ret = native_type_map_native_map_type(fd->returns);
+        if (mp_str_starts_with(ret, mp_str_new("__own__ "))) {
+            ret = mp_str_slice(ret, 8, mp_str_len(ret));
+        }
+        if (mp_str_eq(ret, (&(MpStr){.data=(char*)"__typed_list__",.len=14}))) {
+            MpStr* tl_ret_e = native_type_map_native_get_typed_list_elem(fd->returns);
+            MpStr* tl_ret_n = strmap_strmap_get((&s->typed_lists), tl_ret_e);
+            if ((tl_ret_n != NULL)) {
+                ret = mp_str_concat(tl_ret_n, (&(MpStr){.data=(char*)"*",.len=1}));
+            }
+        }
         if (mp_str_eq(fd->name, (&(MpStr){.data=(char*)"main",.len=4}))) {
             ret = mp_str_new("int");
         }
@@ -510,6 +564,21 @@ void native_compile_file__emit_function_prototypes(CompilerState* s, AstNodeList
         for (int64_t j = 0; j < args_node->args.count; j++) {
             AstArg* arg = args_node->args.items[j]->data;
             MpStr* atype = native_type_map_native_map_type(arg->annotation);
+            AstNode* p_ann = arg->annotation;
+            if (mp_str_starts_with(atype, mp_str_new("__own__ "))) {
+                atype = mp_str_slice(atype, 8, mp_str_len(atype));
+                if (((p_ann != NULL) && (p_ann->tag == TAG_SUBSCRIPT))) {
+                    AstSubscript* own_s = p_ann->data;
+                    p_ann = own_s->slice;
+                }
+            }
+            if (mp_str_eq(atype, (&(MpStr){.data=(char*)"__typed_list__",.len=14}))) {
+                MpStr* tl_elem = native_type_map_native_get_typed_list_elem(p_ann);
+                MpStr* tl_name = strmap_strmap_get((&s->typed_lists), tl_elem);
+                if ((tl_name != NULL)) {
+                    atype = mp_str_concat(tl_name, (&(MpStr){.data=(char*)"*",.len=1}));
+                }
+            }
             if ((j > 0)) {
                 arg_str = mp_str_concat(arg_str, (&(MpStr){.data=(char*)", ",.len=2}));
             }
@@ -536,6 +605,16 @@ void native_compile_file__compile_one_func(CompilerState* restrict s, AstFunctio
         return;
     }
     MpStr* ret = native_type_map_native_map_type(fd->returns);
+    if (mp_str_starts_with(ret, mp_str_new("__own__ "))) {
+        ret = mp_str_slice(ret, 8, mp_str_len(ret));
+    }
+    if (mp_str_eq(ret, (&(MpStr){.data=(char*)"__typed_list__",.len=14}))) {
+        MpStr* tl_ret_e2 = native_type_map_native_get_typed_list_elem(fd->returns);
+        MpStr* tl_ret_n2 = strmap_strmap_get((&s->typed_lists), tl_ret_e2);
+        if ((tl_ret_n2 != NULL)) {
+            ret = mp_str_concat(tl_ret_n2, (&(MpStr){.data=(char*)"*",.len=1}));
+        }
+    }
     AstArguments* args_node = fd->args->data;
     MpStr* arg_str = mp_str_new("");
     strmap_strmap_free((&s->local_vars));
@@ -549,6 +628,21 @@ void native_compile_file__compile_one_func(CompilerState* restrict s, AstFunctio
     for (int64_t j = 0; j < args_node->args.count; j++) {
         AstArg* arg = args_node->args.items[j]->data;
         MpStr* atype = native_type_map_native_map_type(arg->annotation);
+        AstNode* d_ann = arg->annotation;
+        if (mp_str_starts_with(atype, mp_str_new("__own__ "))) {
+            atype = mp_str_slice(atype, 8, mp_str_len(atype));
+            if (((d_ann != NULL) && (d_ann->tag == TAG_SUBSCRIPT))) {
+                AstSubscript* own_s2 = d_ann->data;
+                d_ann = own_s2->slice;
+            }
+        }
+        if (mp_str_eq(atype, (&(MpStr){.data=(char*)"__typed_list__",.len=14}))) {
+            MpStr* tl_elem2 = native_type_map_native_get_typed_list_elem(d_ann);
+            MpStr* tl_name2 = strmap_strmap_get((&s->typed_lists), tl_elem2);
+            if ((tl_name2 != NULL)) {
+                atype = mp_str_concat(tl_name2, (&(MpStr){.data=(char*)"*",.len=1}));
+            }
+        }
         if ((mp_str_eq(arg->name, (&(MpStr){.data=(char*)"self",.len=4})) && (mp_str_len(prefix) > 0))) {
             MpStr* struct_name = mp_str_slice(prefix, 0, (mp_str_len(prefix) - 1));
             atype = mp_str_concat(struct_name, (&(MpStr){.data=(char*)"*",.len=1}));

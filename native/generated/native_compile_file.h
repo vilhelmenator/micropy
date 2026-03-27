@@ -14,6 +14,7 @@ void native_compile_file__emit(CompilerState* restrict s, const MpStr* restrict 
 void native_compile_file__emit_raw(CompilerState* restrict s, const MpStr* restrict line);
 void native_compile_file__first_pass(CompilerState* s, AstNodeList body);
 int64_t native_compile_file__has_decorator(const AstFunctionDef* restrict fd, const MpStr* restrict name);
+void native_compile_file__scan_annotation_for_list(CompilerState* restrict s, const AstNode* restrict ann);
 void native_compile_file__scan_typed_lists(CompilerState* s, AstNodeList body);
 void native_compile_file__emit_typed_lists(CompilerState* s);
 int64_t native_compile_file__has_test_funcs(AstNodeList body);

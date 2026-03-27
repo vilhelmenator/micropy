@@ -1,4 +1,4 @@
-/* mpy_stamp: 1774564649.180125 */
+/* mpy_stamp: 1774633057.845279 */
 #include "micropy_rt.h"
 #include "native_codegen_stmt.h"
 
@@ -28,15 +28,73 @@ void native_codegen_stmt__emit(CompilerState* restrict s, const MpStr* restrict 
     mp_write_text(s->lines, mp_str_new("\n"));
 }
 
-void native_codegen_stmt_native_compile_assert(CompilerState* restrict s, const AstNode* restrict node) {
-    AstAssert* p = node->data;
-    MpStr* cond = native_codegen_expr_native_compile_expr(s, p->test);
-    if ((p->msg != NULL)) {
-        MpStr* msg = native_codegen_expr_native_compile_expr(s, p->msg);
-        native_codegen_stmt__emit(s, mp_str_format("if (!(%s)) { fprintf(stderr, \"AssertionError: %%s\\n\", %s); abort(); }", cond->data, msg->data));
-    } else {
-        native_codegen_stmt__emit(s, mp_str_format("if (!(%s)) { fprintf(stderr, \"AssertionError\\n\"); abort(); }", cond->data));
+MpStr* native_codegen_stmt__aug_op_method(uint8_t op) {
+    if ((op == OP_ADD)) {
+        return mp_str_new("__add__");
     }
+    if ((op == OP_SUB)) {
+        return mp_str_new("__sub__");
+    }
+    if ((op == OP_MULT)) {
+        return mp_str_new("__mul__");
+    }
+    if ((op == OP_DIV)) {
+        return mp_str_new("__truediv__");
+    }
+    if ((op == OP_MOD)) {
+        return mp_str_new("__mod__");
+    }
+    return NULL;
+}
+
+void native_codegen_stmt_native_compile_aug_assign(CompilerState* restrict s, const AstNode* restrict node) {
+    AstAugAssign* p = node->data;
+    MpStr* tgt_type = native_infer_native_infer_type(s, p->target);
+    MpStr* tgt_base = native_infer__strip_ptr(tgt_type);
+    if (strmap_strmap_has((&s->structs), tgt_base)) {
+        MpStr* method = native_codegen_stmt__aug_op_method(p->op);
+        if ((method != NULL)) {
+            MpStr* mname = mp_str_concat(mp_str_concat(tgt_base, (&(MpStr){.data=(char*)"_",.len=1})), method);
+            if (strmap_strmap_has((&s->func_ret_types), mname)) {
+                MpStr* tgt = native_codegen_expr_native_compile_expr(s, p->target);
+                MpStr* rhs = native_codegen_expr_native_compile_expr(s, p->value);
+                MpStr* self_arg = tgt;
+                if ((native_infer__ends_with_star(tgt_type) == 0)) {
+                    self_arg = mp_str_format("&(%s)", tgt->data);
+                }
+                native_codegen_stmt__emit(s, mp_str_format("%s = %s(%s, %s);", tgt->data, mname->data, self_arg->data, rhs->data));
+                return;
+            }
+        }
+    }
+    MpStr* tgt2 = native_codegen_expr_native_compile_expr(s, p->target);
+    MpStr* val = native_codegen_expr_native_compile_expr(s, p->value);
+    if ((s->safe_mode != 0)) {
+        if ((mp_str_eq(tgt_type, (&(MpStr){.data=(char*)"int64_t",.len=7})) || mp_str_eq(tgt_type, (&(MpStr){.data=(char*)"int",.len=3})) || mp_str_eq(tgt_type, (&(MpStr){.data=(char*)"int32_t",.len=7})) || mp_str_eq(tgt_type, (&(MpStr){.data=(char*)"uint8_t",.len=7})))) {
+            if ((p->op == OP_DIV)) {
+                native_codegen_stmt__emit(s, mp_str_format("%s = mp_safe_div_i64(%s, %s, __FILE__, __LINE__);", tgt2->data, tgt2->data, val->data));
+                return;
+            }
+            if ((p->op == OP_MOD)) {
+                native_codegen_stmt__emit(s, mp_str_format("%s = mp_safe_mod_i64(%s, %s, __FILE__, __LINE__);", tgt2->data, tgt2->data, val->data));
+                return;
+            }
+            if ((p->op == OP_ADD)) {
+                native_codegen_stmt__emit(s, mp_str_format("%s = mp_safe_add_i64(%s, %s, __FILE__, __LINE__);", tgt2->data, tgt2->data, val->data));
+                return;
+            }
+            if ((p->op == OP_SUB)) {
+                native_codegen_stmt__emit(s, mp_str_format("%s = mp_safe_sub_i64(%s, %s, __FILE__, __LINE__);", tgt2->data, tgt2->data, val->data));
+                return;
+            }
+            if ((p->op == OP_MULT)) {
+                native_codegen_stmt__emit(s, mp_str_format("%s = mp_safe_mul_i64(%s, %s, __FILE__, __LINE__);", tgt2->data, tgt2->data, val->data));
+                return;
+            }
+        }
+    }
+    MpStr* op = native_codegen_expr_native_compile_op(p->op);
+    native_codegen_stmt__emit(s, mp_str_format("%s %s= %s;", tgt2->data, op->data, val->data));
 }
 
 MpStr* native_codegen_stmt__match_pattern_cond(CompilerState* restrict s, MpStr* restrict subject, const AstNode* restrict pattern) {
@@ -195,6 +253,76 @@ void native_codegen_stmt_native_compile_match(CompilerState* restrict s, const A
     }
 }
 
+void native_codegen_stmt_native_compile_assert(CompilerState* restrict s, const AstNode* restrict node) {
+    AstAssert* p = node->data;
+    MpStr* cond = native_codegen_expr_native_compile_expr(s, p->test);
+    if ((p->msg != NULL)) {
+        MpStr* msg = native_codegen_expr_native_compile_expr(s, p->msg);
+        native_codegen_stmt__emit(s, mp_str_format("if (!(%s)) { fprintf(stderr, \"AssertionError: %%s\\n\", %s); abort(); }", cond->data, msg->data));
+    } else {
+        native_codegen_stmt__emit(s, mp_str_format("if (!(%s)) { fprintf(stderr, \"AssertionError\\n\"); abort(); }", cond->data));
+    }
+}
+
+void native_codegen_stmt_native_compile_assign(CompilerState* restrict s, const AstNode* restrict node) {
+    AstAssign* p = node->data;
+    MpStr* val = native_codegen_expr_native_compile_expr(s, p->value);
+    for (int64_t i = 0; i < p->targets.count; i++) {
+        AstNode* tgt_node = p->targets.items[i];
+        if ((tgt_node->tag == TAG_SUBSCRIPT)) {
+            AstSubscript* ts = tgt_node->data;
+            if (((ts->value != NULL) && (ts->value->tag == TAG_NAME))) {
+                AstName* tn = ts->value->data;
+                MpStr* tl_et = strmap_strmap_get((&s->list_vars), tn->id);
+                if ((tl_et != NULL)) {
+                    MpStr* tl_ln = strmap_strmap_get((&s->typed_lists), tl_et);
+                    if ((tl_ln != NULL)) {
+                        MpStr* obj_e = native_codegen_expr_native_compile_expr(s, ts->value);
+                        MpStr* idx_e = native_codegen_expr_native_compile_expr(s, ts->slice);
+                        native_codegen_stmt__emit(s, mp_str_format("%s_set(%s, %s, %s);", tl_ln->data, obj_e->data, idx_e->data, val->data));
+                        continue;
+                    }
+                }
+                MpStr* d_vt = strmap_strmap_get((&s->local_vars), mp_str_concat((&(MpStr){.data=(char*)"__dict_V_",.len=9}), tn->id));
+                if ((d_vt != NULL)) {
+                    MpStr* d_obj = native_codegen_expr_native_compile_expr(s, ts->value);
+                    MpStr* d_key = native_codegen_expr_native_compile_expr(s, ts->slice);
+                    MpStr* boxed_v = mp_str_format("mp_val_int((int64_t)(%s))", val->data);
+                    if (mp_str_eq(d_vt, (&(MpStr){.data=(char*)"double",.len=6}))) {
+                        boxed_v = mp_str_format("mp_val_float(%s)", val->data);
+                    }
+                    native_codegen_stmt__emit(s, mp_str_format("mp_dict_set(%s, %s, %s);", d_obj->data, d_key->data, boxed_v->data));
+                    continue;
+                }
+            }
+        }
+        MpStr* tgt = native_codegen_expr_native_compile_expr(s, tgt_node);
+        native_codegen_stmt__emit(s, mp_str_format("%s = %s;", tgt->data, val->data));
+    }
+}
+
+void native_codegen_stmt_native_compile_while(CompilerState* restrict s, const AstNode* restrict node) {
+    AstWhile* p = node->data;
+    MpStr* cond = native_codegen_expr_native_compile_expr(s, p->test);
+    native_codegen_stmt__emit(s, mp_str_format("while (%s) {", cond->data));
+    s->indent = (int32_t)((s->indent + 1));
+    for (int64_t i = 0; i < p->body.count; i++) {
+        native_codegen_stmt_native_compile_stmt(s, p->body.items[i]);
+    }
+    s->indent = (int32_t)((s->indent - 1));
+    native_codegen_stmt__emit(s, mp_str_new("}"));
+}
+
+void native_codegen_stmt_native_compile_return(CompilerState* restrict s, const AstNode* restrict node) {
+    AstReturn* p = node->data;
+    if ((p->value != NULL)) {
+        MpStr* val = native_codegen_expr_native_compile_expr(s, p->value);
+        native_codegen_stmt__emit(s, mp_str_format("return %s;", val->data));
+    } else {
+        native_codegen_stmt__emit(s, mp_str_new("return;"));
+    }
+}
+
 void native_codegen_stmt_native_compile_if(CompilerState* restrict s, const AstNode* restrict node) {
     AstIf* p = node->data;
     MpStr* cond = native_codegen_expr_native_compile_expr(s, p->test);
@@ -243,366 +371,6 @@ void native_codegen_stmt_native_compile_if(CompilerState* restrict s, const AstN
         s->indent = (int32_t)((s->indent - 1));
     }
     native_codegen_stmt__emit(s, mp_str_new("}"));
-}
-
-void native_codegen_stmt_native_compile_raise(CompilerState* restrict s, const AstNode* restrict node) {
-    AstRaise* p = node->data;
-    if ((p->exc != NULL)) {
-        MpStr* msg = native_codegen_expr_native_compile_expr(s, p->exc);
-        MpStr* ret = s->current_func_ret_type;
-        if (((ret != NULL) && mp_str_starts_with(ret, mp_str_new("Result_")))) {
-            native_codegen_stmt__emit(s, mp_str_format("return %s_err(%s);", ret->data, msg->data));
-        } else {
-            native_codegen_stmt__emit(s, mp_str_format("fprintf(stderr, \"Error: %%s\\n\", %s); abort();", msg->data));
-        }
-    } else {
-        native_codegen_stmt__emit(s, mp_str_new("fprintf(stderr, \"raise with no argument\\n\"); abort();"));
-    }
-}
-
-void native_codegen_stmt_native_compile_return(CompilerState* restrict s, const AstNode* restrict node) {
-    AstReturn* p = node->data;
-    if ((p->value != NULL)) {
-        MpStr* val = native_codegen_expr_native_compile_expr(s, p->value);
-        native_codegen_stmt__emit(s, mp_str_format("return %s;", val->data));
-    } else {
-        native_codegen_stmt__emit(s, mp_str_new("return;"));
-    }
-}
-
-void native_codegen_stmt_native_compile_while(CompilerState* restrict s, const AstNode* restrict node) {
-    AstWhile* p = node->data;
-    MpStr* cond = native_codegen_expr_native_compile_expr(s, p->test);
-    native_codegen_stmt__emit(s, mp_str_format("while (%s) {", cond->data));
-    s->indent = (int32_t)((s->indent + 1));
-    for (int64_t i = 0; i < p->body.count; i++) {
-        native_codegen_stmt_native_compile_stmt(s, p->body.items[i]);
-    }
-    s->indent = (int32_t)((s->indent - 1));
-    native_codegen_stmt__emit(s, mp_str_new("}"));
-}
-
-void native_codegen_stmt_native_compile_ann_assign(CompilerState* restrict s, const AstNode* restrict node) {
-    "Variable declaration with type annotation.";
-    AstAnnAssign* p = node->data;
-    if (((p->target == NULL) || (p->target->tag != TAG_NAME))) {
-        native_codegen_stmt__emit(s, mp_str_new("/* unsupported ann_assign target */"));
-        return;
-    }
-    AstName* vn = p->target->data;
-    MpStr* ctype = native_type_map_native_map_type(p->annotation);
-    if (mp_str_eq(ctype, (&(MpStr){.data=(char*)"__array__",.len=9}))) {
-        MpStr* elem = mp_str_new("int64_t");
-        MpStr* size = mp_str_new("0");
-        if (((p->annotation != NULL) && (p->annotation->tag == TAG_SUBSCRIPT))) {
-            AstSubscript* ann_sub = p->annotation->data;
-            AstNode* slice_node = ann_sub->slice;
-            if (((slice_node != NULL) && (slice_node->tag == TAG_TUPLE))) {
-                AstTuple* tup = slice_node->data;
-                if ((tup->elts.count >= 1)) {
-                    elem = native_type_map_native_map_type(tup->elts.items[0]);
-                }
-                if ((tup->elts.count >= 2)) {
-                    size = native_codegen_expr_native_compile_expr(s, tup->elts.items[1]);
-                }
-            }
-        }
-        if ((p->value != NULL)) {
-            MpStr* val = native_codegen_expr_native_compile_expr(s, p->value);
-            native_codegen_stmt__emit(s, mp_str_format("%s %s[%s] = %s;", elem->data, vn->id->data, size->data, val->data));
-        } else {
-            native_codegen_stmt__emit(s, mp_str_format("%s %s[%s] = {0};", elem->data, vn->id->data, size->data));
-        }
-        strmap_strmap_set((&s->local_vars), vn->id, elem);
-        ArrayInfo* ai = malloc(sizeof(ArrayInfo));
-        ai->elem_type = elem;
-        ai->size = size;
-        strmap_strmap_set((&s->array_vars), vn->id, ai);
-        return;
-    }
-    if ((mp_str_eq(ctype, (&(MpStr){.data=(char*)"__funcptr__",.len=11})) || mp_str_eq(ctype, (&(MpStr){.data=(char*)"__vec__",.len=7})))) {
-        native_codegen_stmt__emit(s, mp_str_format("/* TODO: %s %s */", ctype->data, vn->id->data));
-        return;
-    }
-    if (mp_str_eq(ctype, (&(MpStr){.data=(char*)"__typed_list__",.len=14}))) {
-        MpStr* elem_t = mp_str_new("int64_t");
-        if (((p->annotation != NULL) && (p->annotation->tag == TAG_SUBSCRIPT))) {
-            AstSubscript* ann_sub2 = p->annotation->data;
-            elem_t = native_type_map_native_map_type(ann_sub2->slice);
-        }
-        MpStr* list_name = strmap_strmap_get((&s->typed_lists), elem_t);
-        if ((list_name != NULL)) {
-            MpStr* list_type = mp_str_concat(list_name, (&(MpStr){.data=(char*)"*",.len=1}));
-            native_codegen_stmt__emit(s, mp_str_format("%s %s = %s_new();", list_type->data, vn->id->data, list_name->data));
-            if (((p->value != NULL) && (p->value->tag == TAG_LIST))) {
-                AstList* p_list = p->value->data;
-                for (int64_t li = 0; li < p_list->elts.count; li++) {
-                    MpStr* lv = native_codegen_expr_native_compile_expr(s, p_list->elts.items[li]);
-                    native_codegen_stmt__emit(s, mp_str_format("%s_append(%s, %s);", list_name->data, vn->id->data, lv->data));
-                }
-            }
-            strmap_strmap_set((&s->local_vars), vn->id, list_type);
-            strmap_strmap_set((&s->list_vars), vn->id, elem_t);
-        } else {
-            native_codegen_stmt__emit(s, mp_str_format("/* typed_list: unknown elem type %s */", elem_t->data));
-        }
-        return;
-    }
-    if (mp_str_starts_with(ctype, mp_str_new("MP_TLS "))) {
-        MpStr* actual_tls = mp_str_slice(ctype, 7, mp_str_len(ctype));
-        if ((p->value != NULL)) {
-            MpStr* val_tls = native_codegen_expr_native_compile_expr(s, p->value);
-            native_codegen_stmt__emit(s, mp_str_format("static MP_TLS %s %s = %s;", actual_tls->data, vn->id->data, val_tls->data));
-        } else {
-            native_codegen_stmt__emit(s, mp_str_format("static MP_TLS %s %s;", actual_tls->data, vn->id->data));
-        }
-        strmap_strmap_set((&s->local_vars), vn->id, actual_tls);
-        return;
-    }
-    if (mp_str_starts_with(ctype, mp_str_new("__static__ "))) {
-        MpStr* actual = mp_str_slice(ctype, 11, mp_str_len(ctype));
-        if ((p->value != NULL)) {
-            MpStr* val2 = native_codegen_expr_native_compile_expr(s, p->value);
-            native_codegen_stmt__emit(s, mp_str_format("static %s %s = %s;", actual->data, vn->id->data, val2->data));
-        } else {
-            native_codegen_stmt__emit(s, mp_str_format("static %s %s;", actual->data, vn->id->data));
-        }
-        strmap_strmap_set((&s->local_vars), vn->id, actual);
-        return;
-    }
-    if ((mp_str_eq(ctype, (&(MpStr){.data=(char*)"MpDict*",.len=7})) && (p->annotation != NULL) && (p->annotation->tag == TAG_SUBSCRIPT))) {
-        AstSubscript* ann_d = p->annotation->data;
-        AstNode* d_base = ann_d->value;
-        if (((d_base != NULL) && (d_base->tag == TAG_NAME))) {
-            AstName* d_bn = d_base->data;
-            if (mp_str_eq(d_bn->id, (&(MpStr){.data=(char*)"dict",.len=4}))) {
-                AstNode* d_sl = ann_d->slice;
-                if (((d_sl != NULL) && (d_sl->tag == TAG_TUPLE))) {
-                    AstTuple* d_tup = d_sl->data;
-                    if ((d_tup->elts.count == 2)) {
-                        MpStr* dk_type = native_type_map_native_map_type(d_tup->elts.items[0]);
-                        MpStr* dv_type = native_type_map_native_map_type(d_tup->elts.items[1]);
-                        strmap_strmap_set((&s->local_vars), mp_str_concat((&(MpStr){.data=(char*)"__dict_K_",.len=9}), vn->id), dk_type);
-                        strmap_strmap_set((&s->local_vars), mp_str_concat((&(MpStr){.data=(char*)"__dict_V_",.len=9}), vn->id), dv_type);
-                        native_codegen_stmt__emit(s, mp_str_format("MpDict* %s = mp_dict_new();", vn->id->data));
-                        if (((p->value != NULL) && (p->value->tag == TAG_DICT))) {
-                            AstDict* p_dict = p->value->data;
-                            for (int64_t di = 0; di < p_dict->keys.count; di++) {
-                                MpStr* dk_expr = native_codegen_expr_native_compile_expr(s, p_dict->keys.items[di]);
-                                MpStr* dv_expr = native_codegen_expr_native_compile_expr(s, p_dict->values.items[di]);
-                                if (mp_str_eq(dk_type, (&(MpStr){.data=(char*)"MpStr*",.len=6}))) {
-                                    AstNode* dk_key = p_dict->keys.items[di];
-                                    if ((dk_key->tag == TAG_CONSTANT)) {
-                                        AstConstant* dkc = dk_key->data;
-                                        if ((dkc->kind == CONST_STR)) {
-                                            dk_expr = native_codegen_expr_native_compile_expr(s, dk_key);
-                                        }
-                                    }
-                                }
-                                MpStr* boxed_dv = mp_str_format("mp_val_int((int64_t)(%s))", dv_expr->data);
-                                if (mp_str_eq(dv_type, (&(MpStr){.data=(char*)"double",.len=6}))) {
-                                    boxed_dv = mp_str_format("mp_val_float(%s)", dv_expr->data);
-                                }
-                                native_codegen_stmt__emit(s, mp_str_format("mp_dict_set(%s, %s, %s);", vn->id->data, dk_expr->data, boxed_dv->data));
-                            }
-                        }
-                        strmap_strmap_set((&s->local_vars), vn->id, ctype);
-                        return;
-                    }
-                }
-            }
-        }
-    }
-    if ((mp_str_eq(ctype, (&(MpStr){.data=(char*)"MpStr*",.len=6})) && (p->value != NULL) && (p->value->tag == TAG_CONSTANT))) {
-        AstConstant* sc = p->value->data;
-        if (((sc->kind == CONST_STR) && (sc->str_val != NULL))) {
-            MpStr* escaped = native_codegen_expr_native_compile_expr(s, p->value);
-            int64_t slen = mp_str_len(sc->str_val);
-            native_codegen_stmt__emit(s, mp_str_format("MpStr _stack_%s = {.data=(char*)%s, .len=%lld};", vn->id->data, escaped->data, slen));
-            native_codegen_stmt__emit(s, mp_str_format("MpStr* %s = &_stack_%s;", vn->id->data, vn->id->data));
-            strmap_strmap_set((&s->local_vars), vn->id, ctype);
-            return;
-        }
-    }
-    if ((p->value != NULL)) {
-        MpStr* val3 = native_codegen_expr_native_compile_expr(s, p->value);
-        native_codegen_stmt__emit(s, mp_str_format("%s %s = %s;", ctype->data, vn->id->data, val3->data));
-    } else {
-        native_codegen_stmt__emit(s, mp_str_format("%s %s;", ctype->data, vn->id->data));
-    }
-    strmap_strmap_set((&s->local_vars), vn->id, ctype);
-}
-
-MpStr* native_codegen_stmt__aug_op_method(uint8_t op) {
-    if ((op == OP_ADD)) {
-        return mp_str_new("__add__");
-    }
-    if ((op == OP_SUB)) {
-        return mp_str_new("__sub__");
-    }
-    if ((op == OP_MULT)) {
-        return mp_str_new("__mul__");
-    }
-    if ((op == OP_DIV)) {
-        return mp_str_new("__truediv__");
-    }
-    if ((op == OP_MOD)) {
-        return mp_str_new("__mod__");
-    }
-    return NULL;
-}
-
-void native_codegen_stmt_native_compile_aug_assign(CompilerState* restrict s, const AstNode* restrict node) {
-    AstAugAssign* p = node->data;
-    MpStr* tgt_type = native_infer_native_infer_type(s, p->target);
-    MpStr* tgt_base = native_infer__strip_ptr(tgt_type);
-    if (strmap_strmap_has((&s->structs), tgt_base)) {
-        MpStr* method = native_codegen_stmt__aug_op_method(p->op);
-        if ((method != NULL)) {
-            MpStr* mname = mp_str_concat(mp_str_concat(tgt_base, (&(MpStr){.data=(char*)"_",.len=1})), method);
-            if (strmap_strmap_has((&s->func_ret_types), mname)) {
-                MpStr* tgt = native_codegen_expr_native_compile_expr(s, p->target);
-                MpStr* rhs = native_codegen_expr_native_compile_expr(s, p->value);
-                MpStr* self_arg = tgt;
-                if ((native_infer__ends_with_star(tgt_type) == 0)) {
-                    self_arg = mp_str_format("&(%s)", tgt->data);
-                }
-                native_codegen_stmt__emit(s, mp_str_format("%s = %s(%s, %s);", tgt->data, mname->data, self_arg->data, rhs->data));
-                return;
-            }
-        }
-    }
-    MpStr* tgt2 = native_codegen_expr_native_compile_expr(s, p->target);
-    MpStr* val = native_codegen_expr_native_compile_expr(s, p->value);
-    if ((s->safe_mode != 0)) {
-        if ((mp_str_eq(tgt_type, (&(MpStr){.data=(char*)"int64_t",.len=7})) || mp_str_eq(tgt_type, (&(MpStr){.data=(char*)"int",.len=3})) || mp_str_eq(tgt_type, (&(MpStr){.data=(char*)"int32_t",.len=7})) || mp_str_eq(tgt_type, (&(MpStr){.data=(char*)"uint8_t",.len=7})))) {
-            if ((p->op == OP_DIV)) {
-                native_codegen_stmt__emit(s, mp_str_format("%s = mp_safe_div_i64(%s, %s, __FILE__, __LINE__);", tgt2->data, tgt2->data, val->data));
-                return;
-            }
-            if ((p->op == OP_MOD)) {
-                native_codegen_stmt__emit(s, mp_str_format("%s = mp_safe_mod_i64(%s, %s, __FILE__, __LINE__);", tgt2->data, tgt2->data, val->data));
-                return;
-            }
-            if ((p->op == OP_ADD)) {
-                native_codegen_stmt__emit(s, mp_str_format("%s = mp_safe_add_i64(%s, %s, __FILE__, __LINE__);", tgt2->data, tgt2->data, val->data));
-                return;
-            }
-            if ((p->op == OP_SUB)) {
-                native_codegen_stmt__emit(s, mp_str_format("%s = mp_safe_sub_i64(%s, %s, __FILE__, __LINE__);", tgt2->data, tgt2->data, val->data));
-                return;
-            }
-            if ((p->op == OP_MULT)) {
-                native_codegen_stmt__emit(s, mp_str_format("%s = mp_safe_mul_i64(%s, %s, __FILE__, __LINE__);", tgt2->data, tgt2->data, val->data));
-                return;
-            }
-        }
-    }
-    MpStr* op = native_codegen_expr_native_compile_op(p->op);
-    native_codegen_stmt__emit(s, mp_str_format("%s %s= %s;", tgt2->data, op->data, val->data));
-}
-
-void native_codegen_stmt_native_compile_assign(CompilerState* restrict s, const AstNode* restrict node) {
-    AstAssign* p = node->data;
-    MpStr* val = native_codegen_expr_native_compile_expr(s, p->value);
-    for (int64_t i = 0; i < p->targets.count; i++) {
-        AstNode* tgt_node = p->targets.items[i];
-        if ((tgt_node->tag == TAG_SUBSCRIPT)) {
-            AstSubscript* ts = tgt_node->data;
-            if (((ts->value != NULL) && (ts->value->tag == TAG_NAME))) {
-                AstName* tn = ts->value->data;
-                MpStr* tl_et = strmap_strmap_get((&s->list_vars), tn->id);
-                if ((tl_et != NULL)) {
-                    MpStr* tl_ln = strmap_strmap_get((&s->typed_lists), tl_et);
-                    if ((tl_ln != NULL)) {
-                        MpStr* obj_e = native_codegen_expr_native_compile_expr(s, ts->value);
-                        MpStr* idx_e = native_codegen_expr_native_compile_expr(s, ts->slice);
-                        native_codegen_stmt__emit(s, mp_str_format("%s_set(%s, %s, %s);", tl_ln->data, obj_e->data, idx_e->data, val->data));
-                        continue;
-                    }
-                }
-                MpStr* d_vt = strmap_strmap_get((&s->local_vars), mp_str_concat((&(MpStr){.data=(char*)"__dict_V_",.len=9}), tn->id));
-                if ((d_vt != NULL)) {
-                    MpStr* d_obj = native_codegen_expr_native_compile_expr(s, ts->value);
-                    MpStr* d_key = native_codegen_expr_native_compile_expr(s, ts->slice);
-                    MpStr* boxed_v = mp_str_format("mp_val_int((int64_t)(%s))", val->data);
-                    if (mp_str_eq(d_vt, (&(MpStr){.data=(char*)"double",.len=6}))) {
-                        boxed_v = mp_str_format("mp_val_float(%s)", val->data);
-                    }
-                    native_codegen_stmt__emit(s, mp_str_format("mp_dict_set(%s, %s, %s);", d_obj->data, d_key->data, boxed_v->data));
-                    continue;
-                }
-            }
-        }
-        MpStr* tgt = native_codegen_expr_native_compile_expr(s, tgt_node);
-        native_codegen_stmt__emit(s, mp_str_format("%s = %s;", tgt->data, val->data));
-    }
-}
-
-MpStr* native_codegen_stmt__infer_cleanup(const MpStr* open_func) {
-    "Infer cleanup function from open/create function name.\n    Matches Python compiler's _infer_cleanup (codegen_stmts.py:1660).";
-    if ((mp_str_eq(open_func, (&(MpStr){.data=(char*)"open",.len=4})) || mp_str_eq(open_func, (&(MpStr){.data=(char*)"file_open",.len=9})))) {
-        return mp_str_new("mp_file_close");
-    }
-    if (mp_str_ends_with(open_func, mp_str_new("_open"))) {
-        MpStr* base = mp_str_slice(open_func, 0, (mp_str_len(open_func) - 5));
-        return mp_str_concat(base, (&(MpStr){.data=(char*)"_close",.len=6}));
-    }
-    if (mp_str_ends_with(open_func, mp_str_new("_new"))) {
-        MpStr* base2 = mp_str_slice(open_func, 0, (mp_str_len(open_func) - 4));
-        return mp_str_concat(base2, (&(MpStr){.data=(char*)"_free",.len=5}));
-    }
-    if (mp_str_ends_with(open_func, mp_str_new("_create"))) {
-        MpStr* base3 = mp_str_slice(open_func, 0, (mp_str_len(open_func) - 7));
-        return mp_str_concat(base3, (&(MpStr){.data=(char*)"_destroy",.len=8}));
-    }
-    return NULL;
-}
-
-void native_codegen_stmt_native_compile_with(CompilerState* restrict s, const AstNode* restrict node) {
-    AstWith* p = node->data;
-    MpStr** cleanup_fns = malloc((16 * 8));
-    MpStr** var_names = malloc((16 * 8));
-    int32_t item_count = p->items.count;
-    for (int64_t i = 0; i < item_count; i++) {
-        MP_PREFETCH(&cleanup_fns[i + 8], 0, 1);
-        MP_PREFETCH(&var_names[i + 8], 0, 1);
-        AstWithItem* item = p->items.items[i]->data;
-        MpStr* enter_expr = native_codegen_expr_native_compile_expr(s, item->context_expr);
-        cleanup_fns[i] = NULL;
-        var_names[i] = NULL;
-        AstNode* ctx = item->context_expr;
-        if (((ctx != NULL) && (ctx->tag == TAG_CALL))) {
-            AstCall* cc = ctx->data;
-            AstNode* cf = cc->func;
-            if (((cf != NULL) && (cf->tag == TAG_NAME))) {
-                AstName* cfn = cf->data;
-                cleanup_fns[i] = native_codegen_stmt__infer_cleanup(cfn->id);
-            }
-        }
-        native_codegen_stmt__emit(s, mp_str_new("{"));
-        s->indent = (int32_t)((s->indent + 1));
-        if (((item->optional_vars != NULL) && (item->optional_vars->tag == TAG_NAME))) {
-            AstName* vn = item->optional_vars->data;
-            var_names[i] = vn->id;
-            native_codegen_stmt__emit(s, mp_str_format("__auto_type %s = %s;", vn->id->data, enter_expr->data));
-        } else {
-            native_codegen_stmt__emit(s, mp_str_format("%s;", enter_expr->data));
-        }
-    }
-    for (int64_t i = 0; i < p->body.count; i++) {
-        native_codegen_stmt_native_compile_stmt(s, p->body.items[i]);
-    }
-    for (int64_t i = 0; i < item_count; i++) {
-        int32_t idx = (int32_t)(((item_count - 1) - i));
-        if (((cleanup_fns[idx] != NULL) && (var_names[idx] != NULL))) {
-            native_codegen_stmt__emit(s, mp_str_format("%s(%s);", cleanup_fns[idx]->data, var_names[idx]->data));
-        }
-        s->indent = (int32_t)((s->indent - 1));
-        native_codegen_stmt__emit(s, mp_str_new("}"));
-    }
-    free(cleanup_fns);
-    free(var_names);
 }
 
 void native_codegen_stmt_native_compile_for(CompilerState* restrict s, const AstNode* restrict node) {
@@ -803,6 +571,274 @@ void native_codegen_stmt_native_compile_for(CompilerState* restrict s, const Ast
         }
     }
     native_codegen_stmt__emit(s, mp_str_new("/* unsupported for loop */"));
+}
+
+void native_codegen_stmt_native_compile_raise(CompilerState* restrict s, const AstNode* restrict node) {
+    AstRaise* p = node->data;
+    if ((p->exc != NULL)) {
+        MpStr* msg = native_codegen_expr_native_compile_expr(s, p->exc);
+        MpStr* ret = s->current_func_ret_type;
+        if (((ret != NULL) && mp_str_starts_with(ret, mp_str_new("Result_")))) {
+            native_codegen_stmt__emit(s, mp_str_format("return %s_err(%s);", ret->data, msg->data));
+        } else {
+            native_codegen_stmt__emit(s, mp_str_format("fprintf(stderr, \"Error: %%s\\n\", %s); abort();", msg->data));
+        }
+    } else {
+        native_codegen_stmt__emit(s, mp_str_new("fprintf(stderr, \"raise with no argument\\n\"); abort();"));
+    }
+}
+
+MpStr* native_codegen_stmt__infer_cleanup(const MpStr* open_func) {
+    "Infer cleanup function from open/create function name.\n    Matches Python compiler's _infer_cleanup (codegen_stmts.py:1660).";
+    if ((mp_str_eq(open_func, (&(MpStr){.data=(char*)"open",.len=4})) || mp_str_eq(open_func, (&(MpStr){.data=(char*)"file_open",.len=9})))) {
+        return mp_str_new("mp_file_close");
+    }
+    if (mp_str_ends_with(open_func, mp_str_new("_open"))) {
+        MpStr* base = mp_str_slice(open_func, 0, (mp_str_len(open_func) - 5));
+        return mp_str_concat(base, (&(MpStr){.data=(char*)"_close",.len=6}));
+    }
+    if (mp_str_ends_with(open_func, mp_str_new("_new"))) {
+        MpStr* base2 = mp_str_slice(open_func, 0, (mp_str_len(open_func) - 4));
+        return mp_str_concat(base2, (&(MpStr){.data=(char*)"_free",.len=5}));
+    }
+    if (mp_str_ends_with(open_func, mp_str_new("_create"))) {
+        MpStr* base3 = mp_str_slice(open_func, 0, (mp_str_len(open_func) - 7));
+        return mp_str_concat(base3, (&(MpStr){.data=(char*)"_destroy",.len=8}));
+    }
+    return NULL;
+}
+
+void native_codegen_stmt_native_compile_with(CompilerState* restrict s, const AstNode* restrict node) {
+    AstWith* p = node->data;
+    if ((p->items.count == 1)) {
+        AstWithItem* item0 = p->items.items[0]->data;
+        AstNode* ctx0 = item0->context_expr;
+        if (((ctx0 != NULL) && (ctx0->tag == TAG_CALL))) {
+            AstCall* sc = ctx0->data;
+            if (((sc->func != NULL) && (sc->func->tag == TAG_NAME))) {
+                AstName* scn = sc->func->data;
+                if ((mp_str_eq(scn->id, (&(MpStr){.data=(char*)"scope",.len=5})) && (sc->args.count >= 2))) {
+                    AstNode* arena_arg = sc->args.items[0];
+                    if ((arena_arg->tag == TAG_NAME)) {
+                        AstName* arena_n = arena_arg->data;
+                        MpStr* size_expr = native_codegen_expr_native_compile_expr(s, sc->args.items[1]);
+                        native_codegen_stmt__emit(s, mp_str_new("{"));
+                        s->indent = (int32_t)((s->indent + 1));
+                        native_codegen_stmt__emit(s, mp_str_format("MpArena* %s = mp_arena_new(%s);", arena_n->id->data, size_expr->data));
+                        strmap_strmap_set((&s->local_vars), arena_n->id, mp_str_new("MpArena*"));
+                        for (int64_t si = 0; si < p->body.count; si++) {
+                            native_codegen_stmt_native_compile_stmt(s, p->body.items[si]);
+                        }
+                        native_codegen_stmt__emit(s, mp_str_format("mp_arena_free(%s);", arena_n->id->data));
+                        s->indent = (int32_t)((s->indent - 1));
+                        native_codegen_stmt__emit(s, mp_str_new("}"));
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    MpStr** cleanup_fns = malloc((16 * 8));
+    MpStr** var_names = malloc((16 * 8));
+    int32_t item_count = p->items.count;
+    for (int64_t i = 0; i < item_count; i++) {
+        MP_PREFETCH(&cleanup_fns[i + 8], 0, 1);
+        MP_PREFETCH(&var_names[i + 8], 0, 1);
+        AstWithItem* item = p->items.items[i]->data;
+        MpStr* enter_expr = native_codegen_expr_native_compile_expr(s, item->context_expr);
+        cleanup_fns[i] = NULL;
+        var_names[i] = NULL;
+        AstNode* ctx = item->context_expr;
+        if (((ctx != NULL) && (ctx->tag == TAG_CALL))) {
+            AstCall* cc = ctx->data;
+            AstNode* cf = cc->func;
+            if (((cf != NULL) && (cf->tag == TAG_NAME))) {
+                AstName* cfn = cf->data;
+                cleanup_fns[i] = native_codegen_stmt__infer_cleanup(cfn->id);
+            }
+        }
+        native_codegen_stmt__emit(s, mp_str_new("{"));
+        s->indent = (int32_t)((s->indent + 1));
+        if (((item->optional_vars != NULL) && (item->optional_vars->tag == TAG_NAME))) {
+            AstName* vn = item->optional_vars->data;
+            var_names[i] = vn->id;
+            native_codegen_stmt__emit(s, mp_str_format("__auto_type %s = %s;", vn->id->data, enter_expr->data));
+        } else {
+            native_codegen_stmt__emit(s, mp_str_format("%s;", enter_expr->data));
+        }
+    }
+    for (int64_t i = 0; i < p->body.count; i++) {
+        native_codegen_stmt_native_compile_stmt(s, p->body.items[i]);
+    }
+    for (int64_t i = 0; i < item_count; i++) {
+        int32_t idx = (int32_t)(((item_count - 1) - i));
+        if (((cleanup_fns[idx] != NULL) && (var_names[idx] != NULL))) {
+            native_codegen_stmt__emit(s, mp_str_format("%s(%s);", cleanup_fns[idx]->data, var_names[idx]->data));
+        }
+        s->indent = (int32_t)((s->indent - 1));
+        native_codegen_stmt__emit(s, mp_str_new("}"));
+    }
+    free(cleanup_fns);
+    free(var_names);
+}
+
+void native_codegen_stmt_native_compile_ann_assign(CompilerState* restrict s, const AstNode* restrict node) {
+    "Variable declaration with type annotation.";
+    AstAnnAssign* p = node->data;
+    if (((p->target == NULL) || (p->target->tag != TAG_NAME))) {
+        native_codegen_stmt__emit(s, mp_str_new("/* unsupported ann_assign target */"));
+        return;
+    }
+    AstName* vn = p->target->data;
+    MpStr* ctype = native_type_map_native_map_type(p->annotation);
+    AstNode* ann_node = p->annotation;
+    if (mp_str_starts_with(ctype, mp_str_new("__own__ "))) {
+        ctype = mp_str_slice(ctype, 8, mp_str_len(ctype));
+        if (((ann_node != NULL) && (ann_node->tag == TAG_SUBSCRIPT))) {
+            AstSubscript* own_sub = ann_node->data;
+            ann_node = own_sub->slice;
+        }
+    }
+    if (mp_str_eq(ctype, (&(MpStr){.data=(char*)"__array__",.len=9}))) {
+        MpStr* elem = mp_str_new("int64_t");
+        MpStr* size = mp_str_new("0");
+        if (((p->annotation != NULL) && (p->annotation->tag == TAG_SUBSCRIPT))) {
+            AstSubscript* ann_sub = p->annotation->data;
+            AstNode* slice_node = ann_sub->slice;
+            if (((slice_node != NULL) && (slice_node->tag == TAG_TUPLE))) {
+                AstTuple* tup = slice_node->data;
+                if ((tup->elts.count >= 1)) {
+                    elem = native_type_map_native_map_type(tup->elts.items[0]);
+                }
+                if ((tup->elts.count >= 2)) {
+                    size = native_codegen_expr_native_compile_expr(s, tup->elts.items[1]);
+                }
+            }
+        }
+        if ((p->value != NULL)) {
+            MpStr* val = native_codegen_expr_native_compile_expr(s, p->value);
+            native_codegen_stmt__emit(s, mp_str_format("%s %s[%s] = %s;", elem->data, vn->id->data, size->data, val->data));
+        } else {
+            native_codegen_stmt__emit(s, mp_str_format("%s %s[%s] = {0};", elem->data, vn->id->data, size->data));
+        }
+        strmap_strmap_set((&s->local_vars), vn->id, elem);
+        ArrayInfo* ai = malloc(sizeof(ArrayInfo));
+        ai->elem_type = elem;
+        ai->size = size;
+        strmap_strmap_set((&s->array_vars), vn->id, ai);
+        return;
+    }
+    if ((mp_str_eq(ctype, (&(MpStr){.data=(char*)"__funcptr__",.len=11})) || mp_str_eq(ctype, (&(MpStr){.data=(char*)"__vec__",.len=7})))) {
+        native_codegen_stmt__emit(s, mp_str_format("/* TODO: %s %s */", ctype->data, vn->id->data));
+        return;
+    }
+    if (mp_str_eq(ctype, (&(MpStr){.data=(char*)"__typed_list__",.len=14}))) {
+        MpStr* elem_t = mp_str_new("int64_t");
+        if (((ann_node != NULL) && (ann_node->tag == TAG_SUBSCRIPT))) {
+            AstSubscript* ann_sub2 = ann_node->data;
+            elem_t = native_type_map_native_map_type(ann_sub2->slice);
+        }
+        MpStr* list_name = strmap_strmap_get((&s->typed_lists), elem_t);
+        if ((list_name != NULL)) {
+            MpStr* list_type = mp_str_concat(list_name, (&(MpStr){.data=(char*)"*",.len=1}));
+            native_codegen_stmt__emit(s, mp_str_format("%s %s = %s_new();", list_type->data, vn->id->data, list_name->data));
+            if (((p->value != NULL) && (p->value->tag == TAG_LIST))) {
+                AstList* p_list = p->value->data;
+                for (int64_t li = 0; li < p_list->elts.count; li++) {
+                    MpStr* lv = native_codegen_expr_native_compile_expr(s, p_list->elts.items[li]);
+                    native_codegen_stmt__emit(s, mp_str_format("%s_append(%s, %s);", list_name->data, vn->id->data, lv->data));
+                }
+            }
+            strmap_strmap_set((&s->local_vars), vn->id, list_type);
+            strmap_strmap_set((&s->list_vars), vn->id, elem_t);
+        } else {
+            native_codegen_stmt__emit(s, mp_str_format("/* typed_list: unknown elem type %s */", elem_t->data));
+        }
+        return;
+    }
+    if (mp_str_starts_with(ctype, mp_str_new("MP_TLS "))) {
+        MpStr* actual_tls = mp_str_slice(ctype, 7, mp_str_len(ctype));
+        if ((p->value != NULL)) {
+            MpStr* val_tls = native_codegen_expr_native_compile_expr(s, p->value);
+            native_codegen_stmt__emit(s, mp_str_format("static MP_TLS %s %s = %s;", actual_tls->data, vn->id->data, val_tls->data));
+        } else {
+            native_codegen_stmt__emit(s, mp_str_format("static MP_TLS %s %s;", actual_tls->data, vn->id->data));
+        }
+        strmap_strmap_set((&s->local_vars), vn->id, actual_tls);
+        return;
+    }
+    if (mp_str_starts_with(ctype, mp_str_new("__static__ "))) {
+        MpStr* actual = mp_str_slice(ctype, 11, mp_str_len(ctype));
+        if ((p->value != NULL)) {
+            MpStr* val2 = native_codegen_expr_native_compile_expr(s, p->value);
+            native_codegen_stmt__emit(s, mp_str_format("static %s %s = %s;", actual->data, vn->id->data, val2->data));
+        } else {
+            native_codegen_stmt__emit(s, mp_str_format("static %s %s;", actual->data, vn->id->data));
+        }
+        strmap_strmap_set((&s->local_vars), vn->id, actual);
+        return;
+    }
+    if ((mp_str_eq(ctype, (&(MpStr){.data=(char*)"MpDict*",.len=7})) && (ann_node != NULL) && (ann_node->tag == TAG_SUBSCRIPT))) {
+        AstSubscript* ann_d = ann_node->data;
+        AstNode* d_base = ann_d->value;
+        if (((d_base != NULL) && (d_base->tag == TAG_NAME))) {
+            AstName* d_bn = d_base->data;
+            if (mp_str_eq(d_bn->id, (&(MpStr){.data=(char*)"dict",.len=4}))) {
+                AstNode* d_sl = ann_d->slice;
+                if (((d_sl != NULL) && (d_sl->tag == TAG_TUPLE))) {
+                    AstTuple* d_tup = d_sl->data;
+                    if ((d_tup->elts.count == 2)) {
+                        MpStr* dk_type = native_type_map_native_map_type(d_tup->elts.items[0]);
+                        MpStr* dv_type = native_type_map_native_map_type(d_tup->elts.items[1]);
+                        strmap_strmap_set((&s->local_vars), mp_str_concat((&(MpStr){.data=(char*)"__dict_K_",.len=9}), vn->id), dk_type);
+                        strmap_strmap_set((&s->local_vars), mp_str_concat((&(MpStr){.data=(char*)"__dict_V_",.len=9}), vn->id), dv_type);
+                        native_codegen_stmt__emit(s, mp_str_format("MpDict* %s = mp_dict_new();", vn->id->data));
+                        if (((p->value != NULL) && (p->value->tag == TAG_DICT))) {
+                            AstDict* p_dict = p->value->data;
+                            for (int64_t di = 0; di < p_dict->keys.count; di++) {
+                                MpStr* dk_expr = native_codegen_expr_native_compile_expr(s, p_dict->keys.items[di]);
+                                MpStr* dv_expr = native_codegen_expr_native_compile_expr(s, p_dict->values.items[di]);
+                                if (mp_str_eq(dk_type, (&(MpStr){.data=(char*)"MpStr*",.len=6}))) {
+                                    AstNode* dk_key = p_dict->keys.items[di];
+                                    if ((dk_key->tag == TAG_CONSTANT)) {
+                                        AstConstant* dkc = dk_key->data;
+                                        if ((dkc->kind == CONST_STR)) {
+                                            dk_expr = native_codegen_expr_native_compile_expr(s, dk_key);
+                                        }
+                                    }
+                                }
+                                MpStr* boxed_dv = mp_str_format("mp_val_int((int64_t)(%s))", dv_expr->data);
+                                if (mp_str_eq(dv_type, (&(MpStr){.data=(char*)"double",.len=6}))) {
+                                    boxed_dv = mp_str_format("mp_val_float(%s)", dv_expr->data);
+                                }
+                                native_codegen_stmt__emit(s, mp_str_format("mp_dict_set(%s, %s, %s);", vn->id->data, dk_expr->data, boxed_dv->data));
+                            }
+                        }
+                        strmap_strmap_set((&s->local_vars), vn->id, ctype);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    if ((mp_str_eq(ctype, (&(MpStr){.data=(char*)"MpStr*",.len=6})) && (p->value != NULL) && (p->value->tag == TAG_CONSTANT))) {
+        AstConstant* sc = p->value->data;
+        if (((sc->kind == CONST_STR) && (sc->str_val != NULL))) {
+            MpStr* escaped = native_codegen_expr_native_compile_expr(s, p->value);
+            int64_t slen = mp_str_len(sc->str_val);
+            native_codegen_stmt__emit(s, mp_str_format("MpStr _stack_%s = {.data=(char*)%s, .len=%lld};", vn->id->data, escaped->data, slen));
+            native_codegen_stmt__emit(s, mp_str_format("MpStr* %s = &_stack_%s;", vn->id->data, vn->id->data));
+            strmap_strmap_set((&s->local_vars), vn->id, ctype);
+            return;
+        }
+    }
+    if ((p->value != NULL)) {
+        MpStr* val3 = native_codegen_expr_native_compile_expr(s, p->value);
+        native_codegen_stmt__emit(s, mp_str_format("%s %s = %s;", ctype->data, vn->id->data, val3->data));
+    } else {
+        native_codegen_stmt__emit(s, mp_str_format("%s %s;", ctype->data, vn->id->data));
+    }
+    strmap_strmap_set((&s->local_vars), vn->id, ctype);
 }
 
 void native_codegen_stmt_native_compile_stmt(CompilerState* restrict s, AstNode* restrict node) {

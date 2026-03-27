@@ -1,4 +1,4 @@
-/* mpy_stamp: 1774537110.050692 */
+/* mpy_stamp: 1774632900.284075 */
 #include "micropy_rt.h"
 #include "native_type_map.h"
 
@@ -169,6 +169,10 @@ MpStr* native_type_map_native_map_type(const AstNode* node) {
             if (mp_str_eq(name, (&(MpStr){.data=(char*)"backref",.len=7}))) {
                 MpStr* inner6 = native_type_map_native_map_type(p4->slice);
                 return mp_str_concat((&(MpStr){.data=(char*)"__backref__ ",.len=12}), inner6);
+            }
+            if (mp_str_eq(name, (&(MpStr){.data=(char*)"own",.len=3}))) {
+                MpStr* inner_own = native_type_map_native_map_type(p4->slice);
+                return mp_str_concat((&(MpStr){.data=(char*)"__own__ ",.len=8}), inner_own);
             }
             if (mp_str_eq(name, (&(MpStr){.data=(char*)"Result",.len=6}))) {
                 MpStr* inner7 = native_type_map_native_map_type(p4->slice);
