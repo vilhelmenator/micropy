@@ -125,7 +125,7 @@ class Compiler(StmtMixin, ExprMixin):
     _lambda_table: dict = field(default_factory=dict)  # id(ast.Lambda) → name
     func_alloc_tags: dict = field(default_factory=dict)  # fname → frozenset of "producer"|"consumer"|"borrows"|"stores"
     _auto_free_vars: set = field(default_factory=set)    # locals auto-deferred for free() in current function
-    _str_literal_vars: set = field(default_factory=set)  # locals init'd from string literal (stack MpStr, no malloc)
+    _str_literal_vars: set = field(default_factory=set)  # locals init'd from string literal (stack NrStr, no malloc)
     _arena_batched_vars: dict = field(default_factory=dict)  # varname → arena batch info for current function
     _arena_batch_meta: dict = field(default_factory=dict)    # arena_name → batch metadata for current function
     _in_stream_func: bool = False     # current function has @stream — subscript writes → non-temporal stores
@@ -213,7 +213,7 @@ class Compiler(StmtMixin, ExprMixin):
                 # List/dict literals are heap allocations too
                 elif node.value and isinstance(node.value, (ast.List, ast.Dict)):
                     _ann_type = map_type(node.annotation) if node.annotation else ""
-                    if _ann_type in ("MpDict*", "__typed_list__") or _ann_type.endswith("List*"):
+                    if _ann_type in ("NrDict*", "__typed_list__") or _ann_type.endswith("List*"):
                         alloc_vars[node.target.id] = "local_only"
             elif isinstance(node, ast.Assign):
                 for t in node.targets:
@@ -281,9 +281,9 @@ class Compiler(StmtMixin, ExprMixin):
 
     # ── Sources that produce non-null pointers ──────────────────────────
     _NONNULL_FUNCS = frozenset({
-        "alloc", "alloc_safe", "mp_alloc", "addr_of", "ref",
+        "alloc", "alloc_safe", "nr_alloc", "addr_of", "ref",
         "arena_new", "list_new", "dict_new", "writer_new",
-        "mp_str_new", "str_new", "mp_list_new", "mp_dict_new",
+        "nr_str_new", "str_new", "nr_list_new", "nr_dict_new",
         "channel_new", "mutex_new", "cond_new", "pool_new",
     })
 
@@ -1204,7 +1204,7 @@ class Compiler(StmtMixin, ExprMixin):
         # Skip vars the compiler already auto-frees or that legitimately escape
         classify = self._escape_classify(func_node)
         skip_vars = {v for v, st in classify.items() if st in ("local_only", "escaping")}
-        # Also skip vars allocated via raw alloc functions (alloc, alloc_safe, mp_alloc).
+        # Also skip vars allocated via raw alloc functions (alloc, alloc_safe, nr_alloc).
         # These are either alloca-substituted (stack, no free needed) or get a
         # conditional alloca/malloc with auto-free already handled by codegen.
         for _node in ast.walk(func_node):
@@ -1424,7 +1424,7 @@ class Compiler(StmtMixin, ExprMixin):
             if isinstance(node.value, float):
                 return "double"
             if isinstance(node.value, str):
-                return "MpStr*"
+                return "NrStr*"
             return "int64_t"
 
         if isinstance(node, ast.Name):
@@ -1517,7 +1517,7 @@ class Compiler(StmtMixin, ExprMixin):
             return self.infer_type(node.body)
 
         if isinstance(node, ast.ListComp):
-            return "MpList*"
+            return "NrList*"
 
         return "int64_t"
 
@@ -1569,55 +1569,55 @@ class Compiler(StmtMixin, ExprMixin):
                 return _math_ret[fname]
 
             if fname == "input":
-                return "MpStr*"
+                return "NrStr*"
             if fname == "exit":
                 return "void"
 
             rt_types = {
-                "list_new": "MpList*", "list_get": "MpVal", "list_len": "int64_t",
-                "list_pop": "MpVal", "dict_new": "MpDict*", "dict_get": "MpVal",
+                "list_new": "NrList*", "list_get": "NrVal", "list_len": "int64_t",
+                "list_pop": "NrVal", "dict_new": "NrDict*", "dict_get": "NrVal",
                 "dict_len": "int64_t", "dict_has": "int",
-                "str_new": "MpStr*", "str_concat": "MpStr*", "str_len": "int64_t",
-                "str_eq": "int", "str_from_int": "MpStr*", "str_from_float": "MpStr*",
-                "str_upper": "MpStr*", "str_lower": "MpStr*", "str_slice": "MpStr*",
-                "str_repeat": "MpStr*", "str_find": "int64_t",
+                "str_new": "NrStr*", "str_concat": "NrStr*", "str_len": "int64_t",
+                "str_eq": "int", "str_from_int": "NrStr*", "str_from_float": "NrStr*",
+                "str_upper": "NrStr*", "str_lower": "NrStr*", "str_slice": "NrStr*",
+                "str_repeat": "NrStr*", "str_find": "int64_t",
                 "str_contains": "int", "str_starts_with": "int", "str_ends_with": "int",
-                "str_strip": "MpStr*", "str_lstrip": "MpStr*", "str_rstrip": "MpStr*",
-                "str_split": "MpList*", "str_format": "MpStr*",
-                "str": "MpStr*",
+                "str_strip": "NrStr*", "str_lstrip": "NrStr*", "str_rstrip": "NrStr*",
+                "str_split": "NrList*", "str_format": "NrStr*",
+                "str": "NrStr*",
                 "rand_int": "int64_t", "rand_float": "double",
                 "time_now": "int64_t", "time_ms": "int64_t",
-                "getenv": "MpStr*",
-                "val_int": "MpVal", "val_float": "MpVal",
-                "val_str": "MpVal", "as_int": "int64_t", "as_float": "double",
-                "open": "MpFile",
-                "file_open": "MpFile", "file_open_safe": "MpFile",
-                "file_read_all": "MpStr*", "file_read_line": "MpStr*",
+                "getenv": "NrStr*",
+                "val_int": "NrVal", "val_float": "NrVal",
+                "val_str": "NrVal", "as_int": "int64_t", "as_float": "double",
+                "open": "NrFile",
+                "file_open": "NrFile", "file_open_safe": "NrFile",
+                "file_read_all": "NrStr*", "file_read_line": "NrStr*",
                 "file_eof": "int", "file_exists": "int", "file_size": "int64_t",
                 "dir_exists": "int", "dir_create": "int", "dir_remove": "int",
-                "dir_cwd": "MpStr*", "dir_chdir": "int", "dir_list": "MpList*",
-                "path_join": "MpStr*", "path_ext": "MpStr*",
-                "path_basename": "MpStr*", "path_dirname": "MpStr*",
+                "dir_cwd": "NrStr*", "dir_chdir": "int", "dir_list": "NrList*",
+                "path_join": "NrStr*", "path_ext": "NrStr*",
+                "path_basename": "NrStr*", "path_dirname": "NrStr*",
                 "remove_file": "int", "rename_file": "int",
-                "thread_spawn": "MpThread", "mutex_new": "MpMutex*",
-                "cond_new": "MpCond*",
-                "channel_new": "MpChannel*", "channel_send": "int",
+                "thread_spawn": "NrThread", "mutex_new": "NrMutex*",
+                "cond_new": "NrCond*",
+                "channel_new": "NrChannel*", "channel_send": "int",
                 "channel_recv": "int",
-                "channel_recv_val": "MpVal", "channel_drain": "MpList*",
+                "channel_recv_val": "NrVal", "channel_drain": "NrList*",
                 "channel_has_data": "int",
                 "atomic_add": "int64_t", "atomic_sub": "int64_t",
                 "atomic_load": "int64_t", "atomic_store": "void",
                 "atomic_cas": "int64_t",
-                "pool_new": "MpThreadPool*",
-                "writer_new": "MpWriter*", "writer_pos": "int64_t",
+                "pool_new": "NrThreadPool*",
+                "writer_new": "NrWriter*", "writer_pos": "int64_t",
                 "writer_to_bytes": "uint8_t*",
-                "reader_new": "MpReader*", "reader_pos": "int64_t",
+                "reader_new": "NrReader*", "reader_pos": "int64_t",
                 "read_i8": "int8_t", "read_i16": "int16_t",
                 "read_i32": "int32_t", "read_i64": "int64_t",
                 "read_u8": "uint8_t", "read_u16": "uint16_t",
                 "read_u32": "uint32_t", "read_u64": "uint64_t",
                 "read_f32": "float", "read_f64": "double",
-                "read_bool": "int", "read_str": "MpStr*",
+                "read_bool": "int", "read_str": "NrStr*",
             }
             if fname in rt_types:
                 return rt_types[fname]
@@ -1667,12 +1667,12 @@ class Compiler(StmtMixin, ExprMixin):
                     return mi.functions[attr][0]
             # Method calls on known types
             obj_type = self.infer_type(obj)
-            if obj_type == "MpStr*":
+            if obj_type == "NrStr*":
                 _str_ret = {
-                    "concat": "MpStr*", "upper": "MpStr*", "lower": "MpStr*",
-                    "slice": "MpStr*", "repeat": "MpStr*",
-                    "strip": "MpStr*", "lstrip": "MpStr*", "rstrip": "MpStr*",
-                    "split": "MpList*", "format": "MpStr*",
+                    "concat": "NrStr*", "upper": "NrStr*", "lower": "NrStr*",
+                    "slice": "NrStr*", "repeat": "NrStr*",
+                    "strip": "NrStr*", "lstrip": "NrStr*", "rstrip": "NrStr*",
+                    "split": "NrList*", "format": "NrStr*",
                     "len": "int64_t", "find": "int64_t",
                     "eq": "int", "contains": "int",
                     "starts_with": "int", "ends_with": "int",
@@ -2024,10 +2024,10 @@ class Compiler(StmtMixin, ExprMixin):
                 self.compile_import_from(node)
 
         # ---- Emit C file ----
-        # micropy_rt.h brings in stdint, stdio, stdlib, string, math — no need to repeat them.
+        # nathra_rt.h brings in stdint, stdio, stdlib, string, math — no need to repeat them.
         if self.safe_mode:
-            self.emit("#define MP_SAFE")
-        self.emit('#include "micropy_rt.h"')
+            self.emit("#define NR_SAFE")
+        self.emit('#include "nathra_rt.h"')
         if self._variadic_funcs:
             self.emit('#include <stdarg.h>')
         for inc in self.c_includes:
@@ -2037,7 +2037,7 @@ class Compiler(StmtMixin, ExprMixin):
                 self.emit(f'#include "{inc}"')
         if self.test_funcs:
             self._ensure_test_header()
-            self.emit('#include "micropy_test.h"')
+            self.emit('#include "nathra_test.h"')
         if module_name != "__main__":
             self.emit(f'#include "{module_name}.h"')
         else:
@@ -2060,10 +2060,10 @@ class Compiler(StmtMixin, ExprMixin):
 
         # Debug mode: define the shared alloc counter and register exit check
         if self.debug_mode and module_name == "__main__":
-            self.emit("#ifdef MICROPY_DEBUG")
-            self.emit("volatile long long _mp_alloc_count = 0;")
+            self.emit("#ifdef NATHRA_DEBUG")
+            self.emit("volatile long long _nr_alloc_count = 0;")
             self.emit("__attribute__((constructor)) static void _mp_debug_init(void) {")
-            self.emit("    atexit(_mp_alloc_assert_zero);")
+            self.emit("    atexit(_nr_alloc_assert_zero);")
             self.emit("}")
             self.emit("#endif")
             self.emit("")
@@ -2412,14 +2412,14 @@ class Compiler(StmtMixin, ExprMixin):
         if module_name == "__main__":
             self.emit("")
             self.emit("/* Platform directory implementations */")
-            self.emit("#define MICROPY_RT_IMPL")
-            self.emit('#include "micropy_rt.h"')
+            self.emit("#define NATHRA_RT_IMPL")
+            self.emit('#include "nathra_rt.h"')
 
         # ---- Generate header ----
         guard = f"{module_name.upper()}_H"
         self.emit_header(f"#ifndef {guard}")
         self.emit_header(f"#define {guard}")
-        self.emit_header('#include "micropy_types.h"')
+        self.emit_header('#include "nathra_types.h"')
         seen_imports = set()
         for imp in self.imports:
             if imp not in seen_imports:
@@ -2501,10 +2501,10 @@ class Compiler(StmtMixin, ExprMixin):
         import os as _os
         _src_mtime = _os.path.getmtime(filepath)
         for _mod_name in self.compiled_files:
-            _dep = _os.path.join(self.source_dir, _mod_name + ".mpy")
+            _dep = _os.path.join(self.source_dir, _mod_name + ".nth")
             if _os.path.exists(_dep):
                 _src_mtime = max(_src_mtime, _os.path.getmtime(_dep))
-        c_source = f"/* mpy_stamp: {_src_mtime:.6f} */\n" + c_source
+        c_source = f"/* nth_stamp: {_src_mtime:.6f} */\n" + c_source
 
         return c_source, h_source, mod_info
 
@@ -2513,20 +2513,20 @@ class Compiler(StmtMixin, ExprMixin):
     # ------------------------------------------------------------------
 
     _SCALAR_WRITE = {
-        "int8_t": "mp_write_i8", "int16_t": "mp_write_i16",
-        "int32_t": "mp_write_i32", "int64_t": "mp_write_i64",
-        "uint8_t": "mp_write_u8", "uint16_t": "mp_write_u16",
-        "uint32_t": "mp_write_u32", "uint64_t": "mp_write_u64",
-        "float": "mp_write_f32", "double": "mp_write_f64",
-        "int": "mp_write_bool",
+        "int8_t": "nr_write_i8", "int16_t": "nr_write_i16",
+        "int32_t": "nr_write_i32", "int64_t": "nr_write_i64",
+        "uint8_t": "nr_write_u8", "uint16_t": "nr_write_u16",
+        "uint32_t": "nr_write_u32", "uint64_t": "nr_write_u64",
+        "float": "nr_write_f32", "double": "nr_write_f64",
+        "int": "nr_write_bool",
     }
     _SCALAR_READ = {
-        "int8_t": "mp_read_i8", "int16_t": "mp_read_i16",
-        "int32_t": "mp_read_i32", "int64_t": "mp_read_i64",
-        "uint8_t": "mp_read_u8", "uint16_t": "mp_read_u16",
-        "uint32_t": "mp_read_u32", "uint64_t": "mp_read_u64",
-        "float": "mp_read_f32", "double": "mp_read_f64",
-        "int": "mp_read_bool",
+        "int8_t": "nr_read_i8", "int16_t": "nr_read_i16",
+        "int32_t": "nr_read_i32", "int64_t": "nr_read_i64",
+        "uint8_t": "nr_read_u8", "uint16_t": "nr_read_u16",
+        "uint32_t": "nr_read_u32", "uint64_t": "nr_read_u64",
+        "float": "nr_read_f32", "double": "nr_read_f64",
+        "int": "nr_read_bool",
     }
 
     def _is_flat_serializable(self, sname: str) -> bool:
@@ -2561,7 +2561,7 @@ class Compiler(StmtMixin, ExprMixin):
             return "scalar"
         if ftype in self.serializable_structs:
             return "struct"
-        if ftype == "MpStr*":
+        if ftype == "NrStr*":
             return "str"
         if ftype.endswith("*") and ftype[:-1] in self.serializable_structs:
             return "ptr"
@@ -2577,17 +2577,17 @@ class Compiler(StmtMixin, ExprMixin):
         elif kind == "struct":
             self.emit(f"serialize_{ftype}(w, &v->{fname});")
         elif kind == "str":
-            self.emit(f"mp_write_str(w, v->{fname});")
+            self.emit(f"nr_write_str(w, v->{fname});")
         elif kind == "ptr":
             base = ftype[:-1]
-            self.emit(f"mp_write_u8(w, v->{fname} != NULL ? 1 : 0);")
+            self.emit(f"nr_write_u8(w, v->{fname} != NULL ? 1 : 0);")
             self.emit(f"if (v->{fname} != NULL) {{ serialize_{base}(w, v->{fname}); }}")
         elif kind == "array":
             et = self.struct_array_fields.get((sname, fname), "int64_t")
             sz = self.struct_array_sizes.get((sname, fname), "0")
             if et in self._SCALAR_WRITE:
                 # Bulk write for scalar arrays
-                self.emit(f"mp_write_bytes(w, v->{fname}, sizeof({et}) * {sz});")
+                self.emit(f"nr_write_bytes(w, v->{fname}, sizeof({et}) * {sz});")
             elif et in self.serializable_structs:
                 self.emit(f"for (int64_t _i = 0; _i < {sz}; _i++) {{ serialize_{et}(w, &v->{fname}[_i]); }}")
 
@@ -2599,10 +2599,10 @@ class Compiler(StmtMixin, ExprMixin):
         elif kind == "struct":
             self.emit(f"deserialize_{ftype}(r, &v->{fname});")
         elif kind == "str":
-            self.emit(f"v->{fname} = mp_read_str(r);")
+            self.emit(f"v->{fname} = nr_read_str(r);")
         elif kind == "ptr":
             base = ftype[:-1]
-            self.emit(f"if (mp_read_u8(r)) {{")
+            self.emit(f"if (nr_read_u8(r)) {{")
             self.indent += 1
             self.emit(f"v->{fname} = ({base}*)malloc(sizeof({base}));")
             self.emit(f"deserialize_{base}(r, v->{fname});")
@@ -2612,7 +2612,7 @@ class Compiler(StmtMixin, ExprMixin):
             et = self.struct_array_fields.get((sname, fname), "int64_t")
             sz = self.struct_array_sizes.get((sname, fname), "0")
             if et in self._SCALAR_READ:
-                self.emit(f"mp_read_bytes(r, v->{fname}, sizeof({et}) * {sz});")
+                self.emit(f"nr_read_bytes(r, v->{fname}, sizeof({et}) * {sz});")
             elif et in self.serializable_structs:
                 self.emit(f"for (int64_t _i = 0; _i < {sz}; _i++) {{ deserialize_{et}(r, &v->{fname}[_i]); }}")
 
@@ -2622,8 +2622,8 @@ class Compiler(StmtMixin, ExprMixin):
 
         # Forward declarations (needed for recursive/cross-referencing structs)
         for sname in self.serializable_structs:
-            self.emit(f"static inline void serialize_{sname}(MpWriter* w, {sname}* v);")
-            self.emit(f"static inline void deserialize_{sname}(MpReader* r, {sname}* v);")
+            self.emit(f"static inline void serialize_{sname}(NrWriter* w, {sname}* v);")
+            self.emit(f"static inline void deserialize_{sname}(NrReader* r, {sname}* v);")
         self.emit("")
 
         for sname in self.serializable_structs:
@@ -2633,12 +2633,12 @@ class Compiler(StmtMixin, ExprMixin):
             is_flat = self._is_flat_serializable(sname)
             shash = self._struct_hash(sname, fields)
 
-            # serialize_StructName(MpWriter* w, StructName* v)
-            self.emit(f"static inline void serialize_{sname}(MpWriter* w, {sname}* v) {{")
+            # serialize_StructName(NrWriter* w, StructName* v)
+            self.emit(f"static inline void serialize_{sname}(NrWriter* w, {sname}* v) {{")
             self.indent += 1
-            self.emit(f"mp_write_u32(w, {shash}u);")
+            self.emit(f"nr_write_u32(w, {shash}u);")
             if is_flat:
-                self.emit(f"mp_write_bytes(w, v, sizeof({sname}));")
+                self.emit(f"nr_write_bytes(w, v, sizeof({sname}));")
             else:
                 for fname, ftype in fields:
                     self._emit_serialize_field(sname, fname, ftype)
@@ -2646,10 +2646,10 @@ class Compiler(StmtMixin, ExprMixin):
             self.emit("}")
             self.emit("")
 
-            # deserialize_StructName(MpReader* r, StructName* v)
-            self.emit(f"static inline void deserialize_{sname}(MpReader* r, {sname}* v) {{")
+            # deserialize_StructName(NrReader* r, StructName* v)
+            self.emit(f"static inline void deserialize_{sname}(NrReader* r, {sname}* v) {{")
             self.indent += 1
-            self.emit(f"uint32_t _hash = mp_read_u32(r);")
+            self.emit(f"uint32_t _hash = nr_read_u32(r);")
             self.emit(f"if (_hash != {shash}u) {{")
             self.indent += 1
             self.emit(f'fprintf(stderr, "deserialize_{sname}: schema hash mismatch '
@@ -2658,7 +2658,7 @@ class Compiler(StmtMixin, ExprMixin):
             self.indent -= 1
             self.emit("}")
             if is_flat:
-                self.emit(f"mp_read_bytes(r, v, sizeof({sname}));")
+                self.emit(f"nr_read_bytes(r, v, sizeof({sname}));")
             else:
                 for fname, ftype in fields:
                     self._emit_deserialize_field(sname, fname, ftype)
@@ -2721,19 +2721,19 @@ class Compiler(StmtMixin, ExprMixin):
         for sname in graph_structs:
             all_types |= self._reachable_serializable_types(sname)
         for sname in all_types:
-            self.emit(f"static void _collect_graph_{sname}({sname}* obj, MpPtrSet* seen);")
-            self.emit(f"static void _serialize_graph_{sname}(MpWriter* w, {sname}* v, MpPtrSet* seen);")
-            self.emit(f"static void _deserialize_graph_{sname}(MpReader* r, {sname}* v, void** objs);")
+            self.emit(f"static void _collect_graph_{sname}({sname}* obj, NrPtrSet* seen);")
+            self.emit(f"static void _serialize_graph_{sname}(NrWriter* w, {sname}* v, NrPtrSet* seen);")
+            self.emit(f"static void _deserialize_graph_{sname}(NrReader* r, {sname}* v, void** objs);")
         self.emit("")
 
         # Emit _collect_graph_X for each type
         for sname in all_types:
             fields = self.structs.get(sname, [])
             shash = self._struct_hash(sname, fields)
-            self.emit(f"static void _collect_graph_{sname}({sname}* obj, MpPtrSet* seen) {{")
+            self.emit(f"static void _collect_graph_{sname}({sname}* obj, NrPtrSet* seen) {{")
             self.indent += 1
             self.emit(f"if (obj == NULL) return;")
-            self.emit(f"if (mp_ptrset_find(seen, obj) >= 0) return;")
+            self.emit(f"if (nr_ptrset_find(seen, obj) >= 0) return;")
             # Recurse into ptr children FIRST (post-order: children before parent)
             for fname, ftype in fields:
                 if (sname, fname) in self.backref_fields:
@@ -2749,7 +2749,7 @@ class Compiler(StmtMixin, ExprMixin):
                                 _base = _ft[:-1]
                                 self.emit(f"if (obj->{fname}.{_fn} != NULL) _collect_graph_{_base}(obj->{fname}.{_fn}, seen);")
             # Add self AFTER children
-            self.emit(f"mp_ptrset_add(seen, obj, {shash}u);")
+            self.emit(f"nr_ptrset_add(seen, obj, {shash}u);")
             self.indent -= 1
             self.emit("}")
             self.emit("")
@@ -2758,24 +2758,24 @@ class Compiler(StmtMixin, ExprMixin):
         for sname in all_types:
             fields = self.structs.get(sname, [])
             shash = self._struct_hash(sname, fields)
-            self.emit(f"static void _serialize_graph_{sname}(MpWriter* w, {sname}* v, MpPtrSet* seen) {{")
+            self.emit(f"static void _serialize_graph_{sname}(NrWriter* w, {sname}* v, NrPtrSet* seen) {{")
             self.indent += 1
-            self.emit(f"mp_write_u32(w, {shash}u);")
+            self.emit(f"nr_write_u32(w, {shash}u);")
             for fname, ftype in fields:
                 if ftype.endswith("*") and ftype[:-1] in self.serializable_structs:
                     # ptr field → write index
-                    self.emit(f"mp_write_i32(w, v->{fname} ? mp_ptrset_find(seen, v->{fname}) : -1);")
+                    self.emit(f"nr_write_i32(w, v->{fname} ? nr_ptrset_find(seen, v->{fname}) : -1);")
                 elif ftype in self._SCALAR_WRITE:
                     self.emit(f"{self._SCALAR_WRITE[ftype]}(w, v->{fname});")
-                elif ftype == "MpStr*":
-                    self.emit(f"mp_write_str(w, v->{fname});")
+                elif ftype == "NrStr*":
+                    self.emit(f"nr_write_str(w, v->{fname});")
                 elif ftype in self.serializable_structs:
                     self.emit(f"_serialize_graph_{ftype}(w, &v->{fname}, seen);")
                 elif ftype == "__array__":
                     et = self.struct_array_fields.get((sname, fname), "int64_t")
                     sz = self.struct_array_sizes.get((sname, fname), "0")
                     if et in self._SCALAR_WRITE:
-                        self.emit(f"mp_write_bytes(w, v->{fname}, sizeof({et}) * {sz});")
+                        self.emit(f"nr_write_bytes(w, v->{fname}, sizeof({et}) * {sz});")
                     elif et in self.serializable_structs:
                         self.emit(f"for (int64_t _i = 0; _i < {sz}; _i++) {{ _serialize_graph_{et}(w, &v->{fname}[_i], seen); }}")
             self.indent -= 1
@@ -2786,9 +2786,9 @@ class Compiler(StmtMixin, ExprMixin):
         for sname in all_types:
             fields = self.structs.get(sname, [])
             shash = self._struct_hash(sname, fields)
-            self.emit(f"static void _deserialize_graph_{sname}(MpReader* r, {sname}* v, void** objs) {{")
+            self.emit(f"static void _deserialize_graph_{sname}(NrReader* r, {sname}* v, void** objs) {{")
             self.indent += 1
-            self.emit(f"uint32_t _hash = mp_read_u32(r);")
+            self.emit(f"uint32_t _hash = nr_read_u32(r);")
             self.emit(f"if (_hash != {shash}u) {{ fprintf(stderr, \"deserialize graph {sname}: hash mismatch\\n\"); abort(); }}")
             for fname, ftype in fields:
                 if ftype.endswith("*") and ftype[:-1] in self.serializable_structs:
@@ -2796,7 +2796,7 @@ class Compiler(StmtMixin, ExprMixin):
                     is_backref = (sname, fname) in self.backref_fields
                     self.emit("{")
                     self.indent += 1
-                    self.emit(f"int32_t _idx = mp_read_i32(r);")
+                    self.emit(f"int32_t _idx = nr_read_i32(r);")
                     if is_backref:
                         # Defer — will be set in second pass
                         self.emit(f"v->{fname} = (_idx >= 0 && objs) ? ({base}*)objs[_idx] : NULL;")
@@ -2806,15 +2806,15 @@ class Compiler(StmtMixin, ExprMixin):
                     self.emit("}")
                 elif ftype in self._SCALAR_READ:
                     self.emit(f"v->{fname} = {self._SCALAR_READ[ftype]}(r);")
-                elif ftype == "MpStr*":
-                    self.emit(f"v->{fname} = mp_read_str(r);")
+                elif ftype == "NrStr*":
+                    self.emit(f"v->{fname} = nr_read_str(r);")
                 elif ftype in self.serializable_structs:
                     self.emit(f"_deserialize_graph_{ftype}(r, &v->{fname}, objs);")
                 elif ftype == "__array__":
                     et = self.struct_array_fields.get((sname, fname), "int64_t")
                     sz = self.struct_array_sizes.get((sname, fname), "0")
                     if et in self._SCALAR_READ:
-                        self.emit(f"mp_read_bytes(r, v->{fname}, sizeof({et}) * {sz});")
+                        self.emit(f"nr_read_bytes(r, v->{fname}, sizeof({et}) * {sz});")
                     elif et in self.serializable_structs:
                         self.emit(f"for (int64_t _i = 0; _i < {sz}; _i++) {{ _deserialize_graph_{et}(r, &v->{fname}[_i], objs); }}")
             self.indent -= 1
@@ -2830,19 +2830,19 @@ class Compiler(StmtMixin, ExprMixin):
             # save_X(path, root)
             self.emit(f"static void save_{sname}(const char* path, {sname}* root) {{")
             self.indent += 1
-            self.emit("MpPtrSet seen;")
-            self.emit("mp_ptrset_init(&seen, 32);")
+            self.emit("NrPtrSet seen;")
+            self.emit("nr_ptrset_init(&seen, 32);")
             self.emit(f"_collect_graph_{sname}(root, &seen);")
             self.emit("")
-            self.emit("MpWriter* w = mp_writer_new(256);")
-            self.emit(f"mp_write_u32(w, 0x4D505947u);")  # magic "MPYG"
-            self.emit(f"mp_write_u32(w, {shash}u);")
-            self.emit("mp_write_i32(w, seen.count);")
+            self.emit("NrWriter* w = nr_writer_new(256);")
+            self.emit(f"nr_write_u32(w, 0x4D505947u);")  # magic "MPYG"
+            self.emit(f"nr_write_u32(w, {shash}u);")
+            self.emit("nr_write_i32(w, seen.count);")
             self.emit("")
             # Write type tag + serialized data for each object
             self.emit("for (int32_t _i = 0; _i < seen.count; _i++) {")
             self.indent += 1
-            self.emit("mp_write_u32(w, seen.types[_i]);")
+            self.emit("nr_write_u32(w, seen.types[_i]);")
             # Type-dispatch serialization
             first = True
             for t in sorted(reachable):
@@ -2855,11 +2855,11 @@ class Compiler(StmtMixin, ExprMixin):
             self.emit("}")
             self.emit("")
             self.emit("int64_t buf_len = 0;")
-            self.emit("uint8_t* buf = mp_writer_to_bytes(w, &buf_len);")
-            self.emit("mp_write_file_bin(path, buf, buf_len);")
+            self.emit("uint8_t* buf = nr_writer_to_bytes(w, &buf_len);")
+            self.emit("nr_write_file_bin(path, buf, buf_len);")
             self.emit("free(buf);")
-            self.emit("mp_writer_free(w);")
-            self.emit("mp_ptrset_free(&seen);")
+            self.emit("nr_writer_free(w);")
+            self.emit("nr_ptrset_free(&seen);")
             self.indent -= 1
             self.emit("}")
             self.emit("")
@@ -2868,14 +2868,14 @@ class Compiler(StmtMixin, ExprMixin):
             self.emit(f"static {sname}* load_{sname}(const char* path) {{")
             self.indent += 1
             self.emit("int64_t buf_len;")
-            self.emit("uint8_t* buf = mp_read_file_bin(path, &buf_len);")
+            self.emit("uint8_t* buf = nr_read_file_bin(path, &buf_len);")
             self.emit(f'if (!buf) {{ fprintf(stderr, "load_{sname}: cannot read %s\\n", path); abort(); }}')
-            self.emit("MpReader* r = mp_reader_new(buf, buf_len);")
-            self.emit(f"uint32_t magic = mp_read_u32(r);")
+            self.emit("NrReader* r = nr_reader_new(buf, buf_len);")
+            self.emit(f"uint32_t magic = nr_read_u32(r);")
             self.emit(f'if (magic != 0x4D505947u) {{ fprintf(stderr, "load_{sname}: bad magic\\n"); abort(); }}')
-            self.emit(f"uint32_t root_hash = mp_read_u32(r);")
+            self.emit(f"uint32_t root_hash = nr_read_u32(r);")
             self.emit(f'if (root_hash != {shash}u) {{ fprintf(stderr, "load_{sname}: type mismatch\\n"); abort(); }}')
-            self.emit("int32_t obj_count = mp_read_i32(r);")
+            self.emit("int32_t obj_count = nr_read_i32(r);")
             self.emit("")
             self.emit("void** objs = (void**)malloc(sizeof(void*) * obj_count);")
             self.emit("uint32_t* types = (uint32_t*)malloc(sizeof(uint32_t) * obj_count);")
@@ -2883,7 +2883,7 @@ class Compiler(StmtMixin, ExprMixin):
             # Read type tags and allocate
             self.emit("for (int32_t _i = 0; _i < obj_count; _i++) {")
             self.indent += 1
-            self.emit("types[_i] = mp_read_u32(r);")
+            self.emit("types[_i] = nr_read_u32(r);")
             first = True
             for t in sorted(reachable):
                 t_fields = self.structs.get(t, [])
@@ -2903,7 +2903,7 @@ class Compiler(StmtMixin, ExprMixin):
             self.emit(f"{sname}* root = ({sname}*)objs[obj_count - 1];")
             self.emit("free(objs);")
             self.emit("free(types);")
-            self.emit("mp_reader_free(r);")
+            self.emit("nr_reader_free(r);")
             self.emit("free(buf);")
             self.emit("return root;")
             self.indent -= 1
@@ -2919,11 +2919,11 @@ class Compiler(StmtMixin, ExprMixin):
             arg_str = ", ".join(t for _, t in args) if args else "void"
             self.emit(f"{ret} (*{name})({arg_str});")
         self.indent -= 1
-        self.emit("} MpApi;")
+        self.emit("} NrApi;")
         self.emit("")
-        self.emit("MpApi* get_api(void) {")
+        self.emit("NrApi* get_api(void) {")
         self.indent += 1
-        self.emit("static MpApi _api;")
+        self.emit("static NrApi _api;")
         for name, _, _ in self._export_funcs:
             self.emit(f"_api.{name} = {name};")
         self.emit("return &_api;")
@@ -3176,7 +3176,7 @@ class Compiler(StmtMixin, ExprMixin):
 
         for arg in node.args.args:
             atype = map_type(arg.annotation)
-            _MUTABLE_RT = ("MpReader*", "MpWriter*", "MpArena*", "CompilerState*")
+            _MUTABLE_RT = ("NrReader*", "NrWriter*", "NrArena*", "CompilerState*")
             const_prefix = ""
             if (atype.endswith("*")
                     and not atype.startswith("const ")
@@ -3297,7 +3297,7 @@ class Compiler(StmtMixin, ExprMixin):
         self.emit(f"}}")
         self.emit("")
 
-        _MUTABLE_RT = ("MpReader*", "MpWriter*", "MpArena*", "CompilerState*")
+        _MUTABLE_RT = ("NrReader*", "NrWriter*", "NrArena*", "CompilerState*")
         def _const_arg(aname, atype):
             if (atype.endswith("*") and not atype.startswith("const ")
                     and atype != "void*" and atype not in _MUTABLE_RT
@@ -3315,7 +3315,7 @@ class Compiler(StmtMixin, ExprMixin):
         self.emit(f"int64_t _chunk_size = (_total + _nthreads - 1) / _nthreads;")
         self.emit(f"")
         self.emit(f"{chunk_name} _chunks[{num_threads}];")
-        self.emit(f"MpThread _threads[{num_threads}];")
+        self.emit(f"NrThread _threads[{num_threads}];")
         self.emit(f"int64_t _actual = 0;")
         self.emit(f"")
         self.emit(f"for (int64_t _t = 0; _t < _nthreads; _t++) {{")
@@ -3328,14 +3328,14 @@ class Compiler(StmtMixin, ExprMixin):
             self.emit(f"_chunks[_t].{aname} = {aname};")
         self.emit(f"_chunks[_t]._start = _s;")
         self.emit(f"_chunks[_t]._end = _e;")
-        self.emit(f"_threads[_t] = mp_thread_spawn(_mp_{fname}_worker, &_chunks[_t]);")
+        self.emit(f"_threads[_t] = nr_thread_spawn(_mp_{fname}_worker, &_chunks[_t]);")
         self.emit(f"_actual++;")
         self.indent -= 1
         self.emit(f"}}")
         self.emit(f"")
         self.emit(f"for (int64_t _t = 0; _t < _actual; _t++) {{")
         self.indent += 1
-        self.emit(f"mp_thread_join(_threads[_t]);")
+        self.emit(f"nr_thread_join(_threads[_t]);")
         self.indent -= 1
         self.emit(f"}}")
         for stmt in post_stmts:
@@ -3356,8 +3356,8 @@ class Compiler(StmtMixin, ExprMixin):
         "math", "sys", "os", "os.path", "time", "random", "re",
         "json", "collections", "itertools", "functools", "typing",
         "io", "pathlib", "struct", "array", "ctypes",
-        "enum",     # Python enum stdlib; Micropy emits C typedef enum instead
-        "micropy",  # stub-only import for IDE type checking; not compiled
+        "enum",     # Python enum stdlib — nathra emits C typedef enum instead
+        "nathra", "nathra_stubs",  # stub-only import for IDE type checking; not compiled
     })
 
     def compile_import(self, node: ast.Import):
@@ -3394,11 +3394,11 @@ class Compiler(StmtMixin, ExprMixin):
                 # math functions resolve directly; just skip the module import
             return
         if mod_name not in self.compiled_files:
-            # Check if this is a .py file (codegen hook module) rather than .mpy
+            # Check if this is a .py file (codegen hook module) rather than .nth
             py_path = os.path.join(self.source_dir, f"{mod_name}.py")
-            mpy_path = os.path.join(self.source_dir, f"{mod_name}.mpy")
+            mpy_path = os.path.join(self.source_dir, f"{mod_name}.nth")
             if os.path.exists(py_path) and not os.path.exists(mpy_path):
-                # .py module — record as hook source, don't compile as .mpy
+                # .py module — record as hook source, don't compile as .nth
                 self._py_imports.add(mod_name)
                 for alias in node.names:
                     local_name = alias.asname if alias.asname else alias.name
@@ -3413,7 +3413,7 @@ class Compiler(StmtMixin, ExprMixin):
             self.from_imports[local_name] = (mod_name, alias.name)
 
     def compile_dependency(self, mod_name: str, used_names: set = None):
-        dep_path = os.path.join(self.source_dir, f"{mod_name}.mpy")
+        dep_path = os.path.join(self.source_dir, f"{mod_name}.nth")
         if not os.path.exists(dep_path):
             print(f"Warning: cannot find {dep_path}", file=sys.stderr)
             return
@@ -3506,7 +3506,7 @@ class Compiler(StmtMixin, ExprMixin):
         # Constructor helper
         simple_fields = [(fn, ct) for fn, ct in fields if ct is not None]
         arg_list = ", ".join(f"{ct} {fn}" for fn, ct in simple_fields)
-        self.emit(f"static inline {node.name} _mp_make_{node.name}({arg_list or 'void'}) {{")
+        self.emit(f"static inline {node.name} _nr_make_{node.name}({arg_list or 'void'}) {{")
         self.indent += 1
         self.emit(f"{node.name} _s = {{0}};")
         for fn, ct in simple_fields:
@@ -3574,7 +3574,7 @@ class Compiler(StmtMixin, ExprMixin):
         ret_type = map_type(node.returns)
         if ret_type == "__typed_list__":
             _rt_elem = get_typed_list_elem(node.returns)
-            _rt_name = self.typed_lists.get(_rt_elem, "MpList")
+            _rt_name = self.typed_lists.get(_rt_elem, "NrList")
             ret_type = f"{_rt_name}*"
         if ret_type.startswith("__own__ "):
             ret_type = ret_type[8:]
@@ -3603,9 +3603,9 @@ class Compiler(StmtMixin, ExprMixin):
                         and _ann.value.id == "own"):
                     _ann = _ann.slice
                 elem_t = get_typed_list_elem(_ann)
-                list_name = self.typed_lists.get(elem_t, "MpList")
+                list_name = self.typed_lists.get(elem_t, "NrList")
                 atype = f"{list_name}*"
-            _MUTABLE_RT = ("MpReader*", "MpWriter*", "MpArena*", "CompilerState*")
+            _MUTABLE_RT = ("NrReader*", "NrWriter*", "NrArena*", "CompilerState*")
             const_prefix = ""
             if (atype.endswith("*")
                     and not _is_own
@@ -3661,33 +3661,33 @@ class Compiler(StmtMixin, ExprMixin):
     # -------------------------------------------------------------------
 
     def _ensure_test_header(self):
-        """Copy micropy_test.h next to the source if missing or stale."""
+        """Copy nathra_test.h next to the source if missing or stale."""
         out_dir = self.source_dir or "."
-        src = os.path.join(_HERE, "..", "runtime", "micropy_test.h")
-        dst = os.path.join(out_dir, "micropy_test.h")
+        src = os.path.join(_HERE, "..", "runtime", "nathra_test.h")
+        dst = os.path.join(out_dir, "nathra_test.h")
         if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
             shutil.copy2(src, dst)
 
     def _emit_test_wrapper(self, func_name: str):
-        """Emit a _mp_run_test_NAME() wrapper with timing and pass/fail reporting."""
+        """Emit a _nr_run_test_NAME() wrapper with timing and pass/fail reporting."""
         self._ensure_test_header()
-        self.emit(f"static void _mp_run_test_{func_name}(void) {{")
+        self.emit(f"static void _nr_run_test_{func_name}(void) {{")
         self.indent += 1
-        self.emit(f"_mp_test_total++;")
-        self.emit(f"_mp_test_failures = 0;")
-        self.emit(f'_mp_cprint(_MP_GREEN, "[ RUN      ] {func_name}\\n");')
-        self.emit(f"uint64_t _t1 = _mp_time_ns();")
+        self.emit(f"_nr_test_total++;")
+        self.emit(f"_nr_test_failures = 0;")
+        self.emit(f'_nr_cprint(_NR_GREEN, "[ RUN      ] {func_name}\\n");')
+        self.emit(f"uint64_t _t1 = _nr_time_ns();")
         self.emit(f"{func_name}();")
-        self.emit(f"uint64_t _t2 = _mp_time_ns();")
+        self.emit(f"uint64_t _t2 = _nr_time_ns();")
         self.emit(f"char _tbuf[64]; _mp_fmt_time(_t2 - _t1, _tbuf, sizeof(_tbuf));")
-        self.emit(f"if (_mp_test_failures == 0) {{")
+        self.emit(f"if (_nr_test_failures == 0) {{")
         self.indent += 1
-        self.emit(f'_mp_cprint(_MP_GREEN, "[       OK ] {func_name} %s\\n", _tbuf);')
+        self.emit(f'_nr_cprint(_NR_GREEN, "[       OK ] {func_name} %s\\n", _tbuf);')
         self.indent -= 1
         self.emit(f"}} else {{")
         self.indent += 1
-        self.emit(f"_mp_test_fail_total++;")
-        self.emit(f'_mp_cprint(_MP_RED, "[  FAILED  ] {func_name} (%d failures)\\n", _mp_test_failures);')
+        self.emit(f"_nr_test_fail_total++;")
+        self.emit(f'_nr_cprint(_NR_RED, "[  FAILED  ] {func_name} (%d failures)\\n", _nr_test_failures);')
         self.indent -= 1
         self.emit(f"}}")
         self.indent -= 1
@@ -3698,10 +3698,10 @@ class Compiler(StmtMixin, ExprMixin):
         """Emit a main() that runs all @test functions and prints a summary."""
         self.emit("int main(void) {")
         self.indent += 1
-        self.emit("_mp_time_init();")
+        self.emit("_nr_time_init();")
         for name in self.test_funcs:
-            self.emit(f"_mp_run_test_{name}();")
-        self.emit('printf("[==========] %d tests, %d failures\\n", _mp_test_total, _mp_test_fail_total);')
-        self.emit("return _mp_test_fail_total ? 1 : 0;")
+            self.emit(f"_nr_run_test_{name}();")
+        self.emit('printf("[==========] %d tests, %d failures\\n", _nr_test_total, _nr_test_fail_total);')
+        self.emit("return _nr_test_fail_total ? 1 : 0;")
         self.indent -= 1
         self.emit("}")

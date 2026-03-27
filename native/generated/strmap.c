@@ -1,9 +1,9 @@
-/* mpy_stamp: 1774477395.059091 */
-#include "micropy_rt.h"
+/* nth_stamp: 1774645808.931380 */
+#include "nathra_rt.h"
 #include "strmap.h"
 
 
-static inline StrMap _mp_make_StrMap(MpStr** keys, void** values, uint8_t* states, uint32_t* hashes, int32_t count, int32_t cap) {
+static inline StrMap _nr_make_StrMap(NrStr** keys, void** values, uint8_t* states, uint32_t* hashes, int32_t count, int32_t cap) {
     StrMap _s = {0};
     _s.keys = keys;
     _s.values = values;
@@ -14,7 +14,7 @@ static inline StrMap _mp_make_StrMap(MpStr** keys, void** values, uint8_t* state
     return _s;
 }
 
-static inline StrSet _mp_make_StrSet(MpStr** keys, uint8_t* states, uint32_t* hashes, int32_t count, int32_t cap) {
+static inline StrSet _nr_make_StrSet(NrStr** keys, uint8_t* states, uint32_t* hashes, int32_t count, int32_t cap) {
     StrSet _s = {0};
     _s.keys = keys;
     _s.states = states;
@@ -24,27 +24,27 @@ static inline StrSet _mp_make_StrSet(MpStr** keys, uint8_t* states, uint32_t* ha
     return _s;
 }
 
-uint32_t strmap_str_hash(const MpStr* s);
+uint32_t strmap_str_hash(const NrStr* s);
 StrMap strmap_strmap_new(int32_t initial_cap);
 void strmap_strmap_free(StrMap* m);
-int32_t strmap__strmap_find_slot(const StrMap* restrict m, const MpStr* restrict key, uint32_t h);
+int32_t strmap__strmap_find_slot(const StrMap* restrict m, const NrStr* restrict key, uint32_t h);
 void strmap__strmap_grow(StrMap* m);
-void strmap_strmap_set(StrMap* restrict m, MpStr* restrict key, void* value);
-void* strmap_strmap_get(const StrMap* restrict m, MpStr* restrict key);
-int64_t strmap_strmap_has(const StrMap* restrict m, MpStr* restrict key);
-int64_t strmap_strmap_delete(StrMap* restrict m, MpStr* restrict key);
+void strmap_strmap_set(StrMap* restrict m, NrStr* restrict key, void* value);
+void* strmap_strmap_get(const StrMap* restrict m, NrStr* restrict key);
+int64_t strmap_strmap_has(const StrMap* restrict m, NrStr* restrict key);
+int64_t strmap_strmap_delete(StrMap* restrict m, NrStr* restrict key);
 StrSet strmap_strset_new(int32_t initial_cap);
 void strmap_strset_free(StrSet* s);
 void strmap__strset_grow(StrSet* s);
-void strmap_strset_add(StrSet* restrict s, MpStr* restrict key);
-int64_t strmap_strset_has(const StrSet* restrict s, MpStr* restrict key);
-int64_t strmap_strset_delete(StrSet* restrict s, MpStr* restrict key);
+void strmap_strset_add(StrSet* restrict s, NrStr* restrict key);
+int64_t strmap_strset_has(const StrSet* restrict s, NrStr* restrict key);
+int64_t strmap_strset_delete(StrSet* restrict s, NrStr* restrict key);
 int main(void);
 
-uint32_t strmap_str_hash(const MpStr* s) {
-    "FNV-1a hash of an MpStr.";
+uint32_t strmap_str_hash(const NrStr* s) {
+    "FNV-1a hash of an NrStr.";
     uint64_t h = FNV_OFFSET;
-    for (int64_t i = 0; i < mp_str_len(s); i++) {
+    for (int64_t i = 0; i < nr_str_len(s); i++) {
         h = (h ^ ((uint64_t)(((uint8_t)(s->data[i])))));
         h = (h * FNV_PRIME);
     }
@@ -84,7 +84,7 @@ void strmap_strmap_free(StrMap* m) {
     m->cap = (int32_t)(0);
 }
 
-int32_t strmap__strmap_find_slot(const StrMap* restrict m, const MpStr* restrict key, uint32_t h) {
+int32_t strmap__strmap_find_slot(const StrMap* restrict m, const NrStr* restrict key, uint32_t h) {
     "Find the slot for a key (existing or first empty/tombstone).";
     int32_t mask = (int32_t)((m->cap - 1));
     int32_t idx = (int32_t)((((int64_t)(h)) & mask));
@@ -103,7 +103,7 @@ int32_t strmap__strmap_find_slot(const StrMap* restrict m, const MpStr* restrict
             }
         } else 
         if ((m->hashes[idx] == h)) {
-            if (mp_str_eq(m->keys[idx], key)) {
+            if (nr_str_eq(m->keys[idx], key)) {
                 return idx;
             }
         }
@@ -115,7 +115,7 @@ int32_t strmap__strmap_find_slot(const StrMap* restrict m, const MpStr* restrict
     return (-1);
 }
 
-void strmap_strmap_set(StrMap* restrict m, MpStr* restrict key, void* value) {
+void strmap_strmap_set(StrMap* restrict m, NrStr* restrict key, void* value) {
     "Insert or update a key-value pair.";
     if (((m->count * 4) >= (m->cap * 3))) {
         strmap__strmap_grow(m);
@@ -133,7 +133,7 @@ void strmap_strmap_set(StrMap* restrict m, MpStr* restrict key, void* value) {
 
 void strmap__strmap_grow(StrMap* m) {
     "Double the capacity and rehash all entries.";
-    MpStr** old_keys = m->keys;
+    NrStr** old_keys = m->keys;
     void** old_values = m->values;
     uint8_t* old_states = m->states;
     uint32_t* old_hashes = m->hashes;
@@ -149,8 +149,8 @@ void strmap__strmap_grow(StrMap* m) {
         m->states[i] = EMPTY;
     }
     for (int64_t i = 0; i < old_cap; i++) {
-        MP_PREFETCH(&old_states[i + 8], 0, 1);
-        MP_PREFETCH(&old_keys[i + 8], 0, 1);
+        NR_PREFETCH(&old_states[i + 8], 0, 1);
+        NR_PREFETCH(&old_keys[i + 8], 0, 1);
         if ((old_states[i] == OCCUPIED)) {
             strmap_strmap_set(m, old_keys[i], old_values[i]);
         }
@@ -161,7 +161,7 @@ void strmap__strmap_grow(StrMap* m) {
     free(old_hashes);
 }
 
-void* strmap_strmap_get(const StrMap* restrict m, MpStr* restrict key) {
+void* strmap_strmap_get(const StrMap* restrict m, NrStr* restrict key) {
     "Look up a key. Returns NULL if not found.";
     if ((m->count == 0)) {
         return NULL;
@@ -176,7 +176,7 @@ void* strmap_strmap_get(const StrMap* restrict m, MpStr* restrict key) {
         }
         if ((s == OCCUPIED)) {
             if ((m->hashes[idx] == h)) {
-                if (mp_str_eq(m->keys[idx], key)) {
+                if (nr_str_eq(m->keys[idx], key)) {
                     return m->values[idx];
                 }
             }
@@ -186,7 +186,7 @@ void* strmap_strmap_get(const StrMap* restrict m, MpStr* restrict key) {
     return NULL;
 }
 
-int64_t strmap_strmap_has(const StrMap* restrict m, MpStr* restrict key) {
+int64_t strmap_strmap_has(const StrMap* restrict m, NrStr* restrict key) {
     "Check if a key exists. Returns 1 or 0.";
     if ((m->count == 0)) {
         return 0;
@@ -201,7 +201,7 @@ int64_t strmap_strmap_has(const StrMap* restrict m, MpStr* restrict key) {
         }
         if ((s == OCCUPIED)) {
             if ((m->hashes[idx] == h)) {
-                if (mp_str_eq(m->keys[idx], key)) {
+                if (nr_str_eq(m->keys[idx], key)) {
                     return 1;
                 }
             }
@@ -211,7 +211,7 @@ int64_t strmap_strmap_has(const StrMap* restrict m, MpStr* restrict key) {
     return 0;
 }
 
-int64_t strmap_strmap_delete(StrMap* restrict m, MpStr* restrict key) {
+int64_t strmap_strmap_delete(StrMap* restrict m, NrStr* restrict key) {
     "Remove a key. Returns 1 if found, 0 if not.";
     if ((m->count == 0)) {
         return 0;
@@ -226,7 +226,7 @@ int64_t strmap_strmap_delete(StrMap* restrict m, MpStr* restrict key) {
         }
         if ((s == OCCUPIED)) {
             if ((m->hashes[idx] == h)) {
-                if (mp_str_eq(m->keys[idx], key)) {
+                if (nr_str_eq(m->keys[idx], key)) {
                     m->states[idx] = TOMBSTONE;
                     m->count = (int32_t)((m->count - 1));
                     return 1;
@@ -268,7 +268,7 @@ void strmap_strset_free(StrSet* s) {
     s->cap = (int32_t)(0);
 }
 
-void strmap_strset_add(StrSet* restrict s, MpStr* restrict key) {
+void strmap_strset_add(StrSet* restrict s, NrStr* restrict key) {
     "Add a key to the set.";
     if (((s->count * 4) >= (s->cap * 3))) {
         strmap__strset_grow(s);
@@ -286,7 +286,7 @@ void strmap_strset_add(StrSet* restrict s, MpStr* restrict key) {
             return;
         }
         if ((s->hashes[idx] == h)) {
-            if (mp_str_eq(s->keys[idx], key)) {
+            if (nr_str_eq(s->keys[idx], key)) {
                 return;
             }
         }
@@ -296,7 +296,7 @@ void strmap_strset_add(StrSet* restrict s, MpStr* restrict key) {
 
 void strmap__strset_grow(StrSet* s) {
     "Double the capacity and rehash.";
-    MpStr** old_keys = s->keys;
+    NrStr** old_keys = s->keys;
     uint8_t* old_states = s->states;
     uint32_t* old_hashes = s->hashes;
     int32_t old_cap = s->cap;
@@ -310,8 +310,8 @@ void strmap__strset_grow(StrSet* s) {
         s->states[i] = EMPTY;
     }
     for (int64_t i = 0; i < old_cap; i++) {
-        MP_PREFETCH(&old_states[i + 8], 0, 1);
-        MP_PREFETCH(&old_keys[i + 8], 0, 1);
+        NR_PREFETCH(&old_states[i + 8], 0, 1);
+        NR_PREFETCH(&old_keys[i + 8], 0, 1);
         if ((old_states[i] == OCCUPIED)) {
             strmap_strset_add(s, old_keys[i]);
         }
@@ -321,7 +321,7 @@ void strmap__strset_grow(StrSet* s) {
     free(old_hashes);
 }
 
-int64_t strmap_strset_has(const StrSet* restrict s, MpStr* restrict key) {
+int64_t strmap_strset_has(const StrSet* restrict s, NrStr* restrict key) {
     "Check if a key is in the set. Returns 1 or 0.";
     if ((s->count == 0)) {
         return 0;
@@ -336,7 +336,7 @@ int64_t strmap_strset_has(const StrSet* restrict s, MpStr* restrict key) {
         }
         if ((st == OCCUPIED)) {
             if ((s->hashes[idx] == h)) {
-                if (mp_str_eq(s->keys[idx], key)) {
+                if (nr_str_eq(s->keys[idx], key)) {
                     return 1;
                 }
             }
@@ -346,7 +346,7 @@ int64_t strmap_strset_has(const StrSet* restrict s, MpStr* restrict key) {
     return 0;
 }
 
-int64_t strmap_strset_delete(StrSet* restrict s, MpStr* restrict key) {
+int64_t strmap_strset_delete(StrSet* restrict s, NrStr* restrict key) {
     "Remove a key. Returns 1 if found, 0 if not.";
     if ((s->count == 0)) {
         return 0;
@@ -361,7 +361,7 @@ int64_t strmap_strset_delete(StrSet* restrict s, MpStr* restrict key) {
         }
         if ((st == OCCUPIED)) {
             if ((s->hashes[idx] == h)) {
-                if (mp_str_eq(s->keys[idx], key)) {
+                if (nr_str_eq(s->keys[idx], key)) {
                     s->states[idx] = TOMBSTONE;
                     s->count = (int32_t)((s->count - 1));
                     return 1;

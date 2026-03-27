@@ -10,7 +10,7 @@
 
 | Step | Tool | Time |
 |------|------|------|
-| Parse `.mpy` source | Python `ast.parse` | 3.7 ms |
+| Parse `.nth` source | Python `ast.parse` | 3.7 ms |
 | Analysis + codegen | Python (compiler.py + codegen_*.py) | 92 ms |
 | C compilation | gcc/clang | ~80-200 ms |
 
@@ -26,9 +26,9 @@ and `compile_stmt`.
 ```
                     Python side                  Native side (.dylib)
                 ┌──────────────────┐         ┌──────────────────────┐
-  source.mpy → │ ast.parse()      │         │                      │
+  source.nth → │ ast.parse()      │         │                      │
                │ serialize AST    │──buf──→ │ deserialize AST      │
-               │ to MpWriter      │         │ analysis passes      │
+               │ to NrWriter      │         │ analysis passes      │
                └──────────────────┘         │ codegen → C string   │
                                             │ return buf           │
                     Python side              └──────────────────────┘
@@ -48,7 +48,7 @@ Everything between those two steps moves to native code.
 ## Phase 0 — Binary AST format ✅
 
 Define a compact binary encoding for Python AST nodes and write a Python-side
-serializer that walks `ast.Module` and writes it to an `MpWriter`-compatible
+serializer that walks `ast.Module` and writes it to an `NrWriter`-compatible
 buffer.
 
 ### 0.1 — AST node type enum
@@ -108,8 +108,8 @@ on the native side reads sequentially and builds a tree of C structs.
 ### 0.3 — Python serializer
 
 ```python
-def serialize_ast(tree: ast.Module, w: MpWriter) -> None:
-    """Walk ast.Module depth-first, write binary AST to MpWriter."""
+def serialize_ast(tree: ast.Module, w: NrWriter) -> None:
+    """Walk ast.Module depth-first, write binary AST to NrWriter."""
 ```
 
 One function, ~200 lines. Handles the 41 node types the compiler cares about.
@@ -211,7 +211,7 @@ struct AstFunctionDef:
 ### 1.3 — Binary AST deserializer (native)
 
 ```python
-def deserialize_ast(r: ptr[MpReader], arena: ptr[MpArena]) -> ptr[AstNode]:
+def deserialize_ast(r: ptr[NrReader], arena: ptr[NrArena]) -> ptr[AstNode]:
     """Read binary AST from buffer, allocate all nodes from arena."""
 ```
 
@@ -266,8 +266,8 @@ struct StrSet:
 ```python
 struct CompilerState:
     indent: i32
-    lines: ptr[MpWriter]       # output buffer (not a list of strings — write directly)
-    header: ptr[MpWriter]
+    lines: ptr[NrWriter]       # output buffer (not a list of strings — write directly)
+    header: ptr[NrWriter]
     local_vars: StrMap          # name → ctype
     func_args: StrMap
     structs: StrMap             # name → ptr[FieldList]
@@ -278,12 +278,12 @@ struct CompilerState:
     extern_funcs: StrSet
     serializable_structs: StrSet
     # ... ~40 more fields
-    arena: ptr[MpArena]         # all temporary allocations
+    arena: ptr[NrArena]         # all temporary allocations
 ```
 
 **Key design change:** instead of `self.lines = []` (list of strings joined at
-the end), use an `MpWriter` and write C code directly into the byte buffer.
-`emit()` becomes `mp_write_str(state.lines, line)` + newline. This is faster
+the end), use an `NrWriter` and write C code directly into the byte buffer.
+`emit()` becomes `nr_write_str(state.lines, line)` + newline. This is faster
 and avoids the Python list-of-strings → join overhead.
 
 **Estimated size:** ~200 lines for data structures + state struct.
@@ -441,7 +441,7 @@ def compile_ast(ast_buf: ptr[u8], ast_len: i64,
 ### 7.2 — Python glue
 
 ```python
-# mpy.py — updated to use native compiler
+# nathra.py — updated to use native compiler
 lib = ctypes.CDLL("./compiler.dylib")
 lib.compile_ast.argtypes = [c_char_p, c_int64, POINTER(c_char_p), POINTER(c_int64)]
 lib.compile_ast.restype = c_int32
@@ -462,10 +462,10 @@ c_source = out_buf.value[:out_len.value].decode()
 
 The moment of truth: compile the native compiler with itself.
 
-1. **First bootstrap:** Python compiler compiles the `.mpy` compiler to `.c`,
+1. **First bootstrap:** Python compiler compiles the `.nth` compiler to `.c`,
    gcc compiles it to `compiler.dylib`.
 
-2. **Second bootstrap:** `compiler.dylib` compiles the `.mpy` compiler source
+2. **Second bootstrap:** `compiler.dylib` compiles the `.nth` compiler source
    (via serialized AST). Compare the output `.c` against the Python compiler's
    output — they must be identical.
 
@@ -482,9 +482,9 @@ fallback. Normal development uses the native compiler.
 | Phase | What | Est. | Actual |
 |-------|------|------|--------|
 | 0 | Binary AST format + Python serializer (`ast_serial.py`) | ~400 | 874 |
-| 1 | Native AST structs + deserializer (`ast_nodes.mpy`) | ~400 | 806 |
-| 2 | Symbol tables + compiler state (`strmap.mpy`) | ~200 | 373 |
-| 3 | Type mapping (`native_type_map.mpy`) | ~300 | 295 |
+| 1 | Native AST structs + deserializer (`ast_nodes.nth`) | ~400 | 806 |
+| 2 | Symbol tables + compiler state (`strmap.nth`) | ~200 | 373 |
+| 3 | Type mapping (`native_type_map.nth`) | ~300 | 295 |
 | 4 | Expression codegen | ~1,400 | |
 | 5 | Statement codegen | ~2,500 | |
 | 6 | Analysis passes | ~500 | |
@@ -531,7 +531,7 @@ the Python path and the partial native path, compare results.
 - `ast.parse` — CPython's parser is fast (3.7ms) and correct. No reason to
   rewrite it.
 - AST serializer — small (~200 lines), runs once per compile, in Python.
-- `mpy.py` CLI — argument parsing, file I/O, invoking gcc. ~170 lines.
+- `nathra.py` CLI — argument parsing, file I/O, invoking gcc. ~170 lines.
 - `build.py` — build script interpreter. Could be ported later but low value.
 - `snekc.py` — REPL shell. Stays in Python (it drives the compile loop).
 
@@ -540,18 +540,18 @@ the Python path and the partial native path, compare results.
 ## Measured performance
 
 Self-compilation benchmark: the native compiler compiling its own 8 source
-modules (3,380 lines of .mpy) to C.
+modules (3,380 lines of .nth) to C.
 
 | File | Python | Native | Speedup |
 |------|--------|--------|---------|
-| native_analysis.mpy | 117.9 ms | 0.20 ms | 595x |
-| native_compile_file.mpy | 459.1 ms | 0.78 ms | 587x |
-| native_infer.mpy | 124.2 ms | 0.26 ms | 478x |
-| native_type_map.mpy | 124.0 ms | 0.28 ms | 438x |
-| native_codegen_stmt.mpy | 347.6 ms | 1.01 ms | 344x |
-| native_codegen_call.mpy | 247.2 ms | 0.85 ms | 290x |
-| native_codegen_expr.mpy | 190.5 ms | 0.66 ms | 289x |
-| native_compiler_state.mpy | 35.5 ms | 0.14 ms | 253x |
+| native_analysis.nth | 117.9 ms | 0.20 ms | 595x |
+| native_compile_file.nth | 459.1 ms | 0.78 ms | 587x |
+| native_infer.nth | 124.2 ms | 0.26 ms | 478x |
+| native_type_map.nth | 124.0 ms | 0.28 ms | 438x |
+| native_codegen_stmt.nth | 347.6 ms | 1.01 ms | 344x |
+| native_codegen_call.nth | 247.2 ms | 0.85 ms | 290x |
+| native_codegen_expr.nth | 190.5 ms | 0.66 ms | 289x |
+| native_compiler_state.nth | 35.5 ms | 0.14 ms | 253x |
 | **Total** | **1,646 ms** | **4.18 ms** | **394x** |
 
 End-to-end compile step breakdown:
@@ -576,7 +576,7 @@ The bootstrap work required several improvements to the nathra compiler itself:
 
 - **`cast(T, val)` generic builtin** — `cast(ptr[AstNode], expr)` emits `(AstNode*)(expr)`.
   Replaces the limited `cast_int`/`cast_float` builtins for arbitrary type casts.
-- **`mp_arena_str_new_len`** — arena-allocated string from pointer + length (for binary data).
+- **`nr_arena_str_new_len`** — arena-allocated string from pointer + length (for binary data).
 - **`read_file_bin` / `write_file_bin`** — binary file I/O builtins mapped to runtime functions.
 - **Cross-module compilation fixes:**
   - Header forward typedefs (`typedef struct X X;`) so structs can reference each other

@@ -17,17 +17,17 @@ TYPE_MAP = {
     "float": "double",
     "bool": "int",
     "byte": "uint8_t",
-    "str": "MpStr*",
-    "list": "MpList*",
-    "dict": "MpDict*",
+    "str": "NrStr*",
+    "list": "NrList*",
+    "dict": "NrDict*",
     "void": "void",
-    "arena": "MpArena*",
-    "file": "MpFile",
-    "thread": "MpThread",
-    "mutex": "MpMutex*",
-    "cond": "MpCond*",
-    "channel": "MpChannel*",
-    "threadpool": "MpThreadPool*",
+    "arena": "NrArena*",
+    "file": "NrFile",
+    "thread": "NrThread",
+    "mutex": "NrMutex*",
+    "cond": "NrCond*",
+    "channel": "NrChannel*",
+    "threadpool": "NrThreadPool*",
     "cstr": "char*",
     "va_list": "va_list",
     # Explicit-width numeric types (useful for SIMD / binary data)
@@ -86,7 +86,7 @@ def map_type(annotation, type_map=None) -> str:
             if base.id in ("typed_list", "list"):
                 return "__typed_list__"
             if base.id == "dict":
-                return "MpDict*"
+                return "NrDict*"
             if base.id == "ptr":
                 inner = map_type(annotation.slice, type_map)
                 return f"{inner}*"
@@ -99,7 +99,7 @@ def map_type(annotation, type_map=None) -> str:
                 return f"volatile {inner}"
             if base.id == "thread_local":
                 inner = map_type(annotation.slice, type_map)
-                return f"MP_TLS {inner}"
+                return f"NR_TLS {inner}"
             if base.id == "static":
                 inner = map_type(annotation.slice, type_map)
                 return f"__static__ {inner}"

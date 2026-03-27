@@ -12,10 +12,10 @@ _NARROW_INT_TYPES = frozenset({
 _WIDE_INT_TYPES = frozenset({"int64_t", "int", "uint64_t"})
 
 # Allocation primitives shared with the ownership analysis in compiler.py
-_ALLOC_FUNCS = frozenset({"alloc", "alloc_safe", "mp_alloc",
+_ALLOC_FUNCS = frozenset({"alloc", "alloc_safe", "nr_alloc",
                           "list_new", "dict_new"})
 # Raw byte allocators — only these are eligible for alloca substitution
-_RAW_ALLOC_FUNCS = frozenset({"alloc", "alloc_safe", "mp_alloc"})
+_RAW_ALLOC_FUNCS = frozenset({"alloc", "alloc_safe", "nr_alloc"})
 _FREE_FUNCS  = frozenset({"free",  "mp_free",
                           "list_free", "dict_free", "str_free"})
 
@@ -25,14 +25,14 @@ _SMALL_CTYPES = frozenset({
     "int64_t", "int32_t", "uint32_t", "int16_t", "uint16_t",
     "int8_t",  "uint8_t", "double",   "float",   "bool",
     "char",    "void",    "int",      "uint64_t", "size_t",
-    "ptrdiff_t", "MpVal",
+    "ptrdiff_t", "NrVal",
 })
 
 # ── Struct field layout helpers (used by sparsity warning) ──────────────────
 
 _SCALAR_ALIGN_SIZE = {
     "double":    (8, 8), "int64_t":  (8, 8), "uint64_t":  (8, 8),
-    "ptrdiff_t": (8, 8), "size_t":   (8, 8), "MpVal":     (8, 8),
+    "ptrdiff_t": (8, 8), "size_t":   (8, 8), "NrVal":     (8, 8),
     "int32_t":   (4, 4), "uint32_t": (4, 4), "float":     (4, 4), "int": (4, 4),
     "int16_t":   (2, 2), "uint16_t": (2, 2),
     "int8_t":    (1, 1), "uint8_t":  (1, 1), "bool":      (1, 1), "char": (1, 1),
@@ -183,12 +183,12 @@ class StmtMixin:
 
     def _auto_free_fn(self, ctype: str, name: str) -> str:
         """Return the correct free() call for a given type."""
-        if ctype == "MpStr*":
-            return f"mp_str_free({name})"
-        if ctype == "MpList*":
-            return f"mp_list_free({name})"
-        if ctype == "MpDict*":
-            return f"mp_dict_free({name})"
+        if ctype == "NrStr*":
+            return f"nr_str_free({name})"
+        if ctype == "NrList*":
+            return f"nr_list_free({name})"
+        if ctype == "NrDict*":
+            return f"nr_dict_free({name})"
         # Typed lists: IntList*, FloatList*, etc.
         if ctype.endswith("*"):
             base = ctype[:-1]
@@ -199,22 +199,22 @@ class StmtMixin:
     def _dict_box_val(self, compiled: str, node, val_type: str) -> str:
         """Box a value for dict_set based on the V type of dict[K, V]."""
         if val_type == "int64_t":
-            return f"mp_val_int((int64_t)({compiled}))"
+            return f"nr_val_int((int64_t)({compiled}))"
         if val_type == "double":
-            return f"mp_val_float({compiled})"
-        if val_type == "MpStr*":
-            return f"mp_val_str({compiled})"
-        return f"mp_val_int((int64_t)({compiled}))"
+            return f"nr_val_float({compiled})"
+        if val_type == "NrStr*":
+            return f"nr_val_str({compiled})"
+        return f"nr_val_int((int64_t)({compiled}))"
 
     def _dict_unbox_val(self, compiled: str, val_type: str) -> str:
         """Unbox a value from dict_get based on the V type of dict[K, V]."""
         if val_type == "int64_t":
-            return f"mp_as_int({compiled})"
+            return f"nr_as_int({compiled})"
         if val_type == "double":
-            return f"mp_as_float({compiled})"
-        if val_type == "MpStr*":
-            return f"(MpStr*)(uintptr_t)mp_as_int({compiled})"
-        return f"mp_as_int({compiled})"
+            return f"nr_as_float({compiled})"
+        if val_type == "NrStr*":
+            return f"(NrStr*)(uintptr_t)nr_as_int({compiled})"
+        return f"nr_as_int({compiled})"
 
     # -------------------------------------------------------------------
     # Enum detection
@@ -332,7 +332,7 @@ class StmtMixin:
         # Skip array/funcptr fields (ct==None) — they can't be passed by value
         simple_fields = [(fn, ct) for fn, ct in fields if ct is not None]
         arg_list = ", ".join(f"{ct} {fn}" for fn, ct in simple_fields)
-        self.emit(f"static inline {node.name} _mp_make_{node.name}({arg_list or 'void'}) {{")
+        self.emit(f"static inline {node.name} _nr_make_{node.name}({arg_list or 'void'}) {{")
         self.indent += 1
         self.emit(f"{node.name} _s = {{0}};")
         for fn, ct in simple_fields:
@@ -683,7 +683,7 @@ class StmtMixin:
         # Resolve __typed_list__ return type
         if ret_type == "__typed_list__":
             _rt_elem = get_typed_list_elem(node.returns)
-            _rt_name = self.typed_lists.get(_rt_elem, "MpList")
+            _rt_name = self.typed_lists.get(_rt_elem, "NrList")
             ret_type = f"{_rt_name}*"
         self.current_func_ret_type = ret_type
         args = []
@@ -733,14 +733,14 @@ class StmtMixin:
                         and _ann.value.id == "own"):
                     _ann = _ann.slice
                 elem_t = get_typed_list_elem(_ann)
-                list_name = self.typed_lists.get(elem_t, "MpList")
+                list_name = self.typed_lists.get(elem_t, "NrList")
                 atype = f"{list_name}*"
                 self._list_vars[arg.arg] = elem_t
             # Read-only inference: ptr param never written through → const T*
             # Applied to both prototype and definition so they stay in sync.
             # Types whose fields are mutated through opaque runtime function calls —
             # the read-only inference can't see through these, so never mark const.
-            _MUTABLE_RT_TYPES = ("MpReader*", "MpWriter*", "MpArena*", "CompilerState*")
+            _MUTABLE_RT_TYPES = ("NrReader*", "NrWriter*", "NrArena*", "CompilerState*")
             const_prefix = ""
             if (atype.endswith("*")
                     and not _is_own
@@ -871,8 +871,8 @@ class StmtMixin:
             self._merged_alloc_offsets = {}
             self._merged_buf_name = ""
         # Arena allocation batching: group same-arena top-level calls into one bump.
-        # arena_alloc(a, N) × ≥2 same-arena → single mp_arena_alloc + offset slices.
-        # arena_list_new(a) × ≥2 same-arena → single bump + inline MpList init.
+        # arena_alloc(a, N) × ≥2 same-arena → single nr_arena_alloc + offset slices.
+        # arena_list_new(a) × ≥2 same-arena → single bump + inline NrList init.
         _arena_alloc_groups = {}   # arena_name → [(varname, ctype, size_int)]
         _arena_list_groups  = {}   # arena_name → [varname]
         for _stmt in node.body:
@@ -1033,7 +1033,7 @@ class StmtMixin:
                     if (isinstance(_n, ast.Name)
                             and _n.id in self._compile_time_arrays
                             and _n.id not in _prewarmed):
-                        self.emit(f"MP_PREFETCH(&{_n.id}[0], 0, 1);")
+                        self.emit(f"NR_PREFETCH(&{_n.id}[0], 0, 1);")
                         _prewarmed.add(_n.id)
         for _i, stmt in enumerate(node.body):
             # Open { for struct-value locals declared at this statement
@@ -1082,7 +1082,7 @@ class StmtMixin:
         if hasattr(node, 'lineno'):
             self._current_line = node.lineno
             if self._current_file and self.emit_line_directives:
-                # Emit #line directive so C compiler errors point to .mpy source
+                # Emit #line directive so C compiler errors point to .nth source
                 self.lines.append(f'#line {node.lineno} "{self._current_file}"')
         if isinstance(node, ast.AnnAssign):
             self.compile_ann_assign(node)
@@ -1257,7 +1257,7 @@ class StmtMixin:
 
         if ctype == "__typed_list__":
             elem_t = get_typed_list_elem(annotation)
-            list_name = self.typed_lists.get(elem_t, "MpList")
+            list_name = self.typed_lists.get(elem_t, "NrList")
             ctype = f"{list_name}*"
             self.local_vars[name] = ctype
             self._list_vars[name] = elem_t
@@ -1279,7 +1279,7 @@ class StmtMixin:
             return
 
         # Track dict[K, V] type info for subscript auto-boxing
-        if ctype == "MpDict*" and isinstance(annotation, ast.Subscript):
+        if ctype == "NrDict*" and isinstance(annotation, ast.Subscript):
             _dbase = annotation.value
             if isinstance(_dbase, ast.Name) and _dbase.id == "dict":
                 _dsl = annotation.slice
@@ -1292,7 +1292,7 @@ class StmtMixin:
             # Dict literal: {} → dict_new(), {k: v, ...} → dict_new() + dict_set
             if node.value and isinstance(node.value, ast.Dict):
                 self.local_vars[name] = ctype
-                self.emit(f"MpDict* {name} = mp_dict_new();")
+                self.emit(f"NrDict* {name} = nr_dict_new();")
                 for _di, (_dkey, _dval) in enumerate(zip(node.value.keys, node.value.values)):
                     _kv_info = getattr(self, '_dict_vars', {}).get(name)
                     _dk_type = _kv_info[0] if _kv_info else "char*"
@@ -1301,17 +1301,17 @@ class StmtMixin:
                     _cv = self.compile_expr(_dval)
                     if _kv_info:
                         _cv = self._dict_box_val(_cv, _dval, _dv_type)
-                    self.emit(f"mp_dict_set({name}, {_ck}, {_cv});")
+                    self.emit(f"nr_dict_set({name}, {_ck}, {_cv});")
                 # Auto-defer for local-only dicts
                 if name in self._auto_free_vars and hasattr(self, 'defer_stack'):
-                    self.defer_stack.append(f"mp_dict_free({name})")
+                    self.defer_stack.append(f"nr_dict_free({name})")
                 return
             # Empty dict: {} handled above, explicit dict_new() call handled below
 
         self.local_vars[name] = ctype
 
         # thread_local[T] inside a function requires static storage duration in C
-        if ctype.startswith("MP_TLS "):
+        if ctype.startswith("NR_TLS "):
             if node.value:
                 val = self.compile_expr(node.value)
                 self.emit(f"static {ctype} {name} = {val};")
@@ -1331,14 +1331,14 @@ class StmtMixin:
             return
 
         if node.value:
-            # Literal string optimization: s: str = "hello" → stack MpStr, no malloc
-            if (ctype == "MpStr*"
+            # Literal string optimization: s: str = "hello" → stack NrStr, no malloc
+            if (ctype == "NrStr*"
                     and isinstance(node.value, ast.Constant)
                     and isinstance(node.value.value, str)):
                 s = node.value.value
                 escaped = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                self.emit(f'MpStr _lit_{name} = {{.data=(char*)"{escaped}",.len={len(s)}}};')
-                self.emit(f"MpStr* {name} = &_lit_{name};")
+                self.emit(f'NrStr _lit_{name} = {{.data=(char*)"{escaped}",.len={len(s)}}};')
+                self.emit(f"NrStr* {name} = &_lit_{name};")
                 self._str_literal_vars.add(name)
                 return
             # Arena allocation batching — coalesce same-arena bump allocs
@@ -1353,22 +1353,22 @@ class StmtMixin:
                     _meta["emitted"] = True
                     _bv = _meta["base_var"]
                     if _meta["kind"] == "alloc":
-                        self.emit(f"char* {_bv} = (char*)mp_arena_alloc({_an}, {_meta['total']});")
+                        self.emit(f"char* {_bv} = (char*)nr_arena_alloc({_an}, {_meta['total']});")
                     else:
                         _sv = _meta["slot_var"]
                         self.emit(f"const int64_t {_sv} = (int64_t)"
-                                  f"(((sizeof(MpList)+7)&~7) + ((sizeof(MpVal)*8+7)&~7));")
-                        self.emit(f"char* {_bv} = (char*)mp_arena_alloc({_an}, {_meta['count']} * {_sv});")
+                                  f"(((sizeof(NrList)+7)&~7) + ((sizeof(NrVal)*8+7)&~7));")
+                        self.emit(f"char* {_bv} = (char*)nr_arena_alloc({_an}, {_meta['count']} * {_sv});")
                 _bv = _meta["base_var"]
                 if _bi["kind"] == "alloc":
                     self.emit(f"{_bi['ctype']} {name} = ({_bi['ctype']})({_bv} + {_bi['offset']});")
                 else:
                     _i  = _bi["index"]
                     _sv = _meta["slot_var"]
-                    self.emit(f"MpList* {name} = (MpList*)({_bv} + {_i} * {_sv});")
+                    self.emit(f"NrList* {name} = (NrList*)({_bv} + {_i} * {_sv});")
                     self.emit(f"{name}->cap = 8; {name}->len = 0;")
-                    self.emit(f"{name}->data = (MpVal*)({_bv} + {_i} * {_sv}"
-                              f" + (int64_t)((sizeof(MpList)+7)&~7));")
+                    self.emit(f"{name}->data = (NrVal*)({_bv} + {_i} * {_sv}"
+                              f" + (int64_t)((sizeof(NrList)+7)&~7));")
                 return
             # Escape-analysis alloc optimizations (local-only pointer, no escape)
             # Only raw byte allocators are eligible for alloca substitution
@@ -1524,21 +1524,21 @@ class StmtMixin:
                         idx = self.compile_expr(target.slice)
                         v = self.compile_expr(val_node)
                         if self.safe_mode:
-                            self.emit(f"mp_safe_bounds_check({idx}, {lst}->len, __FILE__, __LINE__);")
+                            self.emit(f"nr_safe_bounds_check({idx}, {lst}->len, __FILE__, __LINE__);")
                         self.emit(f"{_lname}_set({lst}, {idx}, {v});")
                         continue
-                # MpList* → mp_list_set with auto-boxing
-                if self.infer_type(target.value) == "MpList*":
+                # NrList* → nr_list_set with auto-boxing
+                if self.infer_type(target.value) == "NrList*":
                     lst = self.compile_expr(target.value)
                     idx = self.compile_expr(target.slice)
                     v = self.compile_expr(val_node)
                     vt = self.infer_type(val_node)
-                    if vt == "double":   boxed = f"mp_val_float({v})"
-                    elif vt == "MpStr*": boxed = f"mp_val_str({v})"
-                    else:                boxed = f"mp_val_int((int64_t)({v}))"
+                    if vt == "double":   boxed = f"nr_val_float({v})"
+                    elif vt == "NrStr*": boxed = f"nr_val_str({v})"
+                    else:                boxed = f"nr_val_int((int64_t)({v}))"
                     if self.safe_mode:
-                        self.emit(f"mp_safe_bounds_check({idx}, {lst}->len, __FILE__, __LINE__);")
-                    self.emit(f"mp_list_set({lst}, {idx}, {boxed});")
+                        self.emit(f"nr_safe_bounds_check({idx}, {lst}->len, __FILE__, __LINE__);")
+                    self.emit(f"nr_list_set({lst}, {idx}, {boxed});")
                     continue
                 # Dict subscript write: d["key"] = val → dict_set(d, key, val_T(val))
                 if isinstance(target.value, ast.Name):
@@ -1549,7 +1549,7 @@ class StmtMixin:
                         _dkey = self._dict_key_expr(target.slice, _dk_type)
                         v = self.compile_expr(val_node)
                         boxed_v = self._dict_box_val(v, val_node, _dv_type)
-                        self.emit(f"mp_dict_set({_dobj}, {_dkey}, {boxed_v});")
+                        self.emit(f"nr_dict_set({_dobj}, {_dkey}, {boxed_v});")
                         continue
             # Array literal assigned to an existing array variable: emit element-by-element
             if isinstance(val_node, ast.List) and isinstance(target, ast.Name):
@@ -1569,7 +1569,7 @@ class StmtMixin:
                     _ai = self._array_vars.get(target.value.id)
                     if _ai:
                         _idx = self.compile_expr(target.slice)
-                        self.emit(f"mp_safe_bounds_check({_idx}, {_ai[1]}, __FILE__, __LINE__);")
+                        self.emit(f"nr_safe_bounds_check({_idx}, {_ai[1]}, __FILE__, __LINE__);")
             self.emit(f"{tgt} = {val};")
 
     def compile_aug_assign(self, node: ast.AugAssign):
@@ -1602,15 +1602,15 @@ class StmtMixin:
             if _is_int:
                 _safe = None
                 if isinstance(node.op, (ast.Div, ast.FloorDiv)):
-                    _safe = "mp_safe_div_i64"
+                    _safe = "nr_safe_div_i64"
                 elif isinstance(node.op, ast.Mod):
-                    _safe = "mp_safe_mod_i64"
+                    _safe = "nr_safe_mod_i64"
                 elif isinstance(node.op, ast.Add):
-                    _safe = "mp_safe_add_i64"
+                    _safe = "nr_safe_add_i64"
                 elif isinstance(node.op, ast.Sub):
-                    _safe = "mp_safe_sub_i64"
+                    _safe = "nr_safe_sub_i64"
                 elif isinstance(node.op, ast.Mult):
-                    _safe = "mp_safe_mul_i64"
+                    _safe = "nr_safe_mul_i64"
                 if _safe:
                     self.emit(f"{tgt} = {_safe}({tgt}, {val}, __FILE__, __LINE__);")
                     return
@@ -1623,10 +1623,10 @@ class StmtMixin:
             # would be dangling after the function returns)
             if (isinstance(node.value, ast.Constant)
                     and isinstance(node.value.value, str)
-                    and self.current_func_ret_type == "MpStr*"):
+                    and self.current_func_ret_type == "NrStr*"):
                 s = node.value.value
                 escaped = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                val = f'mp_str_new("{escaped}")'
+                val = f'nr_str_new("{escaped}")'
             else:
                 val = self.compile_expr(node.value)
             if isinstance(node.value, ast.Tuple):
@@ -1696,7 +1696,7 @@ class StmtMixin:
             _call_args = ', '.join(_split['free_vars'])
             _call = f"{_split['name']}({_call_args})"
             if _split['arm'] == 'body':
-                self.emit(f"if (MP_UNLIKELY({_cond})) {{")
+                self.emit(f"if (NR_UNLIKELY({_cond})) {{")
                 self.indent += 1
                 self.emit(f"{_call};")
                 self.indent -= 1
@@ -1759,7 +1759,7 @@ class StmtMixin:
             and isinstance(node.body[0], ast.Raise)
         )
         if _is_guard:
-            self.emit(f"if (MP_UNLIKELY({cond})) {{")
+            self.emit(f"if (NR_UNLIKELY({cond})) {{")
         else:
             self.emit(f"if ({cond}) {{")
         self.indent += 1
@@ -1809,7 +1809,7 @@ class StmtMixin:
         self.indent += 1
         # Linked-list / tree traversal prefetch:
         # Pattern: while node is not None: ... node = node.field
-        # Emit MP_PREFETCH(node->field->field) at the top of each iteration.
+        # Emit NR_PREFETCH(node->field->field) at the top of each iteration.
         _ll_var = None
         _ll_field = None
         if (isinstance(node.test, ast.Compare)
@@ -1833,7 +1833,7 @@ class StmtMixin:
                     break
         if _ll_var is not None:
             self.emit(f"if ({_ll_var}->{_ll_field}) "
-                      f"MP_PREFETCH({_ll_var}->{_ll_field}->{_ll_field}, 0, 1);")
+                      f"NR_PREFETCH({_ll_var}->{_ll_field}->{_ll_field}, 0, 1);")
         # Null narrowing: while p is not None → p is non-null in body
         _w_narrowed = None
         _w_saved = None
@@ -1908,11 +1908,11 @@ class StmtMixin:
                 size_expr = self.compile_expr(ctx.args[1])
                 self.emit("{")
                 self.indent += 1
-                self.emit(f"MpArena* {arena_name} = mp_arena_new({size_expr});")
-                self.local_vars[arena_name] = "MpArena*"
+                self.emit(f"NrArena* {arena_name} = nr_arena_new({size_expr});")
+                self.local_vars[arena_name] = "NrArena*"
                 for stmt in node.body:
                     self.compile_stmt(stmt)
-                self.emit(f"mp_arena_free({arena_name});")
+                self.emit(f"nr_arena_free({arena_name});")
                 self.indent -= 1
                 self.emit("}")
                 return
@@ -2027,9 +2027,9 @@ class StmtMixin:
                     self.emit(f"for (int64_t {_idx} = 0; {_idx} < {_dname}->cap; {_idx}++) {{")
                     self.indent += 1
                     self.emit(f"if (!{_dname}->entries[{_idx}].used) continue;")
-                    # Key: char* → wrap as MpStr* if key type is MpStr*
-                    if _dk_type == "MpStr*":
-                        self.emit(f"MpStr* {_kvar} = mp_str_new({_dname}->entries[{_idx}].key);")
+                    # Key: char* → wrap as NrStr* if key type is NrStr*
+                    if _dk_type == "NrStr*":
+                        self.emit(f"NrStr* {_kvar} = nr_str_new({_dname}->entries[{_idx}].key);")
                     else:
                         self.emit(f"char* {_kvar} = {_dname}->entries[{_idx}].key;")
                     self.emit(f"{_dv_type} {_vvar} = {self._dict_unbox_val(f'{_dname}->entries[{_idx}].val', _dv_type)};")
@@ -2125,7 +2125,7 @@ class StmtMixin:
                                     continue
                             except (ValueError, TypeError):
                                 pass
-                        self.emit(f"MP_PREFETCH(&{_arr}[{_target_id} + 8], 0, 1);")
+                        self.emit(f"NR_PREFETCH(&{_arr}[{_target_id} + 8], 0, 1);")
                 # @stream: subscript writes inside this loop become non-temporal stores
                 if self._in_stream_func:
                     self._stream_loop_active = True
@@ -2219,7 +2219,7 @@ class StmtMixin:
                             continue
                     except (ValueError, TypeError):
                         pass
-                self.emit(f"MP_PREFETCH(&{_arr}[{target} + {_prefetch_dist}], 0, 1);")
+                self.emit(f"NR_PREFETCH(&{_arr}[{target} + {_prefetch_dist}], 0, 1);")
         for offset in range(factor):
             self.emit(f"/* iteration +{offset} */")
             self.emit(f"{{")

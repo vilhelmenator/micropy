@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-run_opts.py -- compare Python, naive C, and micropy-optimized C.
+run_opts.py -- compare Python, naive C, and nathra-optimized C.
 
-Shows the effect of micropy's automatic optimizations (restrict inference,
+Shows the effect of nathra's automatic optimizations (restrict inference,
 constant specialization, alloca substitution for local scratch buffers)
 against both a Python baseline and idiomatic C without those annotations.
 
@@ -16,7 +16,7 @@ import sys
 import os
 
 ROOT      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BENCH_MPY = os.path.join(ROOT, "bench", "bench_opts.mpy")
+BENCH_MPY = os.path.join(ROOT, "bench", "bench_opts.nth")
 NAIVE_SRC = os.path.join(ROOT, "bench", "bench_opts_naive.c")
 _EXE      = ".exe" if sys.platform == "win32" else ""
 MPY_BIN   = os.path.join(ROOT, "bench", "bench_opts") + _EXE
@@ -70,7 +70,7 @@ def parse_rows(output):
 
 
 # ── Build ────────────────────────────────────────────────────────────────────
-print("Building micropy version ...")
+print("Building nathra version ...")
 run(
     [sys.executable, os.path.join(ROOT, "mpy.py"), BENCH_MPY,
      f"--cc={CC}", f"--flags={' '.join(FLAGS)}"],
@@ -92,7 +92,7 @@ naive_out = run([NAIVE_BIN])
 print(naive_out)
 
 print()
-print("=== Micropy  (auto-optimised) ===")
+print("=== Nathra  (auto-optimised) ===")
 mpy_out = run([MPY_BIN])
 print(mpy_out)
 
@@ -104,7 +104,7 @@ mpy_rows   = parse_rows(mpy_out)
 names = list(mpy_rows.keys())
 
 print()
-print(f"{'benchmark':<20}  {'python ms':>10}  {'naive C ms':>10}  {'micropy ms':>10}  {'speedup':>8}  optimization")
+print(f"{'benchmark':<20}  {'python ms':>10}  {'naive C ms':>10}  {'nathra ms':>10}  {'speedup':>8}  optimization")
 print(f"{'-'*20}  {'-'*10}  {'-'*10}  {'-'*10}  {'-'*8}  {'-'*40}")
 
 for name in names:
@@ -124,5 +124,5 @@ for name in names:
 print()
 print("Notes:")
 print("  python ms  -- scaled from smaller problem size to match C workload")
-print("  speedup    -- naive C ms / micropy ms  (higher = better)")
+print("  speedup    -- naive C ms / nathra ms  (higher = better)")
 print("  flags      -- both C variants compiled with -O2 -march=native")

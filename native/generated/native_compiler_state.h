@@ -1,6 +1,6 @@
 #ifndef NATIVE_COMPILER_STATE_H
 #define NATIVE_COMPILER_STATE_H
-#include "micropy_types.h"
+#include "nathra_types.h"
 #include "strmap.h"
 typedef struct CompilerState CompilerState;
 typedef struct FieldEntry FieldEntry;
@@ -10,8 +10,8 @@ typedef struct ImportInfo ImportInfo;
 typedef struct ParamTypeList ParamTypeList;
 typedef struct ParamNameList ParamNameList;
 struct CompilerState {
-    MpWriter* lines;
-    MpWriter* header;
+    NrWriter* lines;
+    NrWriter* header;
     int32_t indent;
     StrMap local_vars;
     StrMap func_args;
@@ -35,8 +35,8 @@ struct CompilerState {
     StrSet str_literal_vars;
     StrMap from_imports;
     StrMap modules;
-    MpStr* current_module;
-    MpStr* current_func_ret_type;
+    NrStr* current_module;
+    NrStr* current_func_ret_type;
     int32_t safe_mode;
     int32_t reorder_funcs;
     StrSet* dce_roots;
@@ -48,8 +48,8 @@ struct CompilerState {
 };
 
 struct FieldEntry {
-    MpStr* name;
-    MpStr* ctype;
+    NrStr* name;
+    NrStr* ctype;
 };
 
 struct FieldList {
@@ -58,26 +58,26 @@ struct FieldList {
 };
 
 struct ArrayInfo {
-    MpStr* elem_type;
-    MpStr* size;
+    NrStr* elem_type;
+    NrStr* size;
 };
 
 struct ImportInfo {
-    MpStr* module;
-    MpStr* orig_name;
+    NrStr* module;
+    NrStr* orig_name;
 };
 
 struct ParamTypeList {
-    MpStr** types;
+    NrStr** types;
     int32_t count;
 };
 
 struct ParamNameList {
-    MpStr** names;
+    NrStr** names;
     int32_t count;
 };
 
 CompilerState native_compiler_state_compiler_state_new(void);
 FieldList* native_compiler_state_field_list_new(int32_t count);
-MpStr* native_compiler_state_field_list_find(const FieldList* restrict fl, const MpStr* restrict name);
+NrStr* native_compiler_state_field_list_find(const FieldList* restrict fl, const NrStr* restrict name);
 #endif /* NATIVE_COMPILER_STATE_H */

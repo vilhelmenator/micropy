@@ -1,5 +1,5 @@
-#define MICROPY_RT_IMPL
-#include "micropy_rt.h"
+#define NATHRA_RT_IMPL
+#include "nathra_rt.h"
 
 /* Public entry points -- short aliases for ctypes callers */
 int32_t native_compile_file_native_compile(const uint8_t*, int64_t, uint8_t**, int64_t*);

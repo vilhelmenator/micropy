@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Regenerate native/generated/ .c and .h files from native/src/ .mpy sources.
+"""Regenerate native/generated/ .c and .h files from native/src/ .nth sources.
 
-Uses the Python compiler to compile each .mpy file. The output is checked
+Uses the Python compiler to compile each .nth file. The output is checked
 into version control so that users can build the native dylib without needing
 the Python compiler.
 
@@ -20,11 +20,11 @@ from compiler import Compiler
 SRC_DIR = os.path.join(_ROOT, "native", "src")
 GEN_DIR = os.path.join(_ROOT, "native", "generated")
 
-# rt_impl.c is a tiny shim that #define's MICROPY_RT_IMPL and #include's the
+# rt_impl.c is a tiny shim that #define's NATHRA_RT_IMPL and #include's the
 # runtime header so the implementation gets compiled into the dylib.
 RT_IMPL = """\
-#define MICROPY_RT_IMPL
-#include "micropy_rt.h"
+#define NATHRA_RT_IMPL
+#include "nathra_rt.h"
 
 /* Public entry points -- short aliases for ctypes callers */
 int32_t native_compile_file_native_compile(const uint8_t*, int64_t, uint8_t**, int64_t*);
@@ -75,9 +75,9 @@ def main():
     os.makedirs(GEN_DIR, exist_ok=True)
 
     for mod in MODULES:
-        mpy_path = os.path.join(SRC_DIR, f"{mod}.mpy")
+        mpy_path = os.path.join(SRC_DIR, f"{mod}.nth")
         if not os.path.exists(mpy_path):
-            print(f"  SKIP {mod}.mpy (not found)")
+            print(f"  SKIP {mod}.nth (not found)")
             continue
 
         c = Compiler(source_dir=SRC_DIR, emit_line_directives=False)

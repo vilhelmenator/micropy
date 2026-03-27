@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-snekc — interactive micropy shell.
+snekc — interactive nathra shell.
 
-Compiles Python-syntax input through micropy → C → native shared library,
+Compiles Python-syntax input through nathra → C → native shared library,
 keeping state alive between evaluations via global variable transfer.
 
 Usage:
@@ -63,16 +63,16 @@ class ReplState:
         self.tmpdir = tempfile.mkdtemp(prefix="snekc_")
 
         # Copy runtime headers to tmpdir
-        for hdr in ("micropy_rt.h", "micropy_types.h"):
+        for hdr in ("nathra_rt.h", "nathra_types.h"):
             src = os.path.join(_HERE, "runtime", hdr)
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(self.tmpdir, hdr))
 
-        # Precompile header — avoids re-parsing micropy_rt.h on every eval
-        self.pch_path = os.path.join(self.tmpdir, "micropy_rt.h.pch")
+        # Precompile header — avoids re-parsing nathra_rt.h on every eval
+        self.pch_path = os.path.join(self.tmpdir, "nathra_rt.h.pch")
         pch_cmd = [
             "gcc", "-x", "c-header",
-            os.path.join(self.tmpdir, "micropy_rt.h"),
+            os.path.join(self.tmpdir, "nathra_rt.h"),
             "-o", self.pch_path,
         ]
         subprocess.run(pch_cmd, capture_output=True)
@@ -171,7 +171,7 @@ class ReplState:
     # ------------------------------------------------------------------
 
     def generate_mpy(self):
-        """Build the complete .mpy source from accumulated state."""
+        """Build the complete .nth source from accumulated state."""
         parts = []
 
         # Struct definitions
@@ -209,11 +209,11 @@ class ReplState:
             return
 
         mpy_source = self.generate_mpy()
-        mpy_path = os.path.join(self.tmpdir, "_repl.mpy")
+        mpy_path = os.path.join(self.tmpdir, "_repl.nth")
         with open(mpy_path, "w") as f:
             f.write(mpy_source)
 
-        # Compile .mpy → .c
+        # Compile .nth → .c
         compiler = Compiler(
             source_dir=self.tmpdir,
             platform="all",
@@ -301,7 +301,7 @@ class ReplState:
         return None
 
     def _build_ctypes_struct(self, name):
-        """Dynamically build a ctypes.Structure for a micropy struct."""
+        """Dynamically build a ctypes.Structure for a nathra struct."""
         fields = self.struct_defs.get(name, [])
         cfields = []
         for fname, ftype in fields:
@@ -378,8 +378,8 @@ def main():
     readline.parse_and_bind("tab: complete")
 
     state = ReplState()
-    print("snekc — micropy interactive shell")
-    print(f"Type micropy code. Ctrl-D to exit.\n")
+    print("snekc — nathra interactive shell")
+    print(f"Type nathra code. Ctrl-D to exit.\n")
 
     try:
         while True:

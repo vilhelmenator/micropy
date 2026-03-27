@@ -11,9 +11,9 @@ tests/*.c
 
 # Compiled test binaries (no extension on macOS/Linux)
 tests/test_*
-!tests/test_*.mpy
+!tests/test_*.nth
 test_*
-!test_*.mpy
+!test_*.nth
 
 # Benchmark artifacts
 bench/bench

@@ -1,8 +1,8 @@
-/* mpy_stamp: 1774564649.180125 */
-#include "micropy_rt.h"
+/* nth_stamp: 1774645808.931380 */
+#include "nathra_rt.h"
 #include "native_compiler_state.h"
 
-static inline CompilerState _mp_make_CompilerState(MpWriter* lines, MpWriter* header, int32_t indent, StrMap local_vars, StrMap func_args, StrMap structs, StrMap constants, StrMap mutable_globals, StrMap enums, StrMap func_ret_types, StrMap func_param_types, StrMap func_param_order, StrMap typed_lists, StrMap array_vars, StrMap list_vars, StrMap funcptr_rettypes, StrMap struct_array_fields, StrMap struct_properties, StrMap result_types, StrSet cold_funcs, StrSet extern_funcs, StrSet serializable_structs, StrSet str_literal_vars, StrMap from_imports, StrMap modules, MpStr* current_module, MpStr* current_func_ret_type, int32_t safe_mode, int32_t reorder_funcs, StrSet* dce_roots, int32_t fstr_counter, int32_t lambda_counter, int32_t lc_counter, int32_t try_counter, int32_t thread_spawn_counter) {
+static inline CompilerState _nr_make_CompilerState(NrWriter* lines, NrWriter* header, int32_t indent, StrMap local_vars, StrMap func_args, StrMap structs, StrMap constants, StrMap mutable_globals, StrMap enums, StrMap func_ret_types, StrMap func_param_types, StrMap func_param_order, StrMap typed_lists, StrMap array_vars, StrMap list_vars, StrMap funcptr_rettypes, StrMap struct_array_fields, StrMap struct_properties, StrMap result_types, StrSet cold_funcs, StrSet extern_funcs, StrSet serializable_structs, StrSet str_literal_vars, StrMap from_imports, StrMap modules, NrStr* current_module, NrStr* current_func_ret_type, int32_t safe_mode, int32_t reorder_funcs, StrSet* dce_roots, int32_t fstr_counter, int32_t lambda_counter, int32_t lc_counter, int32_t try_counter, int32_t thread_spawn_counter) {
     CompilerState _s = {0};
     _s.lines = lines;
     _s.header = header;
@@ -42,42 +42,42 @@ static inline CompilerState _mp_make_CompilerState(MpWriter* lines, MpWriter* he
     return _s;
 }
 
-static inline FieldEntry _mp_make_FieldEntry(MpStr* name, MpStr* ctype) {
+static inline FieldEntry _nr_make_FieldEntry(NrStr* name, NrStr* ctype) {
     FieldEntry _s = {0};
     _s.name = name;
     _s.ctype = ctype;
     return _s;
 }
 
-static inline FieldList _mp_make_FieldList(FieldEntry* entries, int32_t count) {
+static inline FieldList _nr_make_FieldList(FieldEntry* entries, int32_t count) {
     FieldList _s = {0};
     _s.entries = entries;
     _s.count = count;
     return _s;
 }
 
-static inline ArrayInfo _mp_make_ArrayInfo(MpStr* elem_type, MpStr* size) {
+static inline ArrayInfo _nr_make_ArrayInfo(NrStr* elem_type, NrStr* size) {
     ArrayInfo _s = {0};
     _s.elem_type = elem_type;
     _s.size = size;
     return _s;
 }
 
-static inline ImportInfo _mp_make_ImportInfo(MpStr* module, MpStr* orig_name) {
+static inline ImportInfo _nr_make_ImportInfo(NrStr* module, NrStr* orig_name) {
     ImportInfo _s = {0};
     _s.module = module;
     _s.orig_name = orig_name;
     return _s;
 }
 
-static inline ParamTypeList _mp_make_ParamTypeList(MpStr** types, int32_t count) {
+static inline ParamTypeList _nr_make_ParamTypeList(NrStr** types, int32_t count) {
     ParamTypeList _s = {0};
     _s.types = types;
     _s.count = count;
     return _s;
 }
 
-static inline ParamNameList _mp_make_ParamNameList(MpStr** names, int32_t count) {
+static inline ParamNameList _nr_make_ParamNameList(NrStr** names, int32_t count) {
     ParamNameList _s = {0};
     _s.names = names;
     _s.count = count;
@@ -86,13 +86,13 @@ static inline ParamNameList _mp_make_ParamNameList(MpStr** names, int32_t count)
 
 CompilerState native_compiler_state_compiler_state_new(void);
 FieldList* native_compiler_state_field_list_new(int32_t count);
-MpStr* native_compiler_state_field_list_find(const FieldList* restrict fl, const MpStr* restrict name);
+NrStr* native_compiler_state_field_list_find(const FieldList* restrict fl, const NrStr* restrict name);
 
 CompilerState native_compiler_state_compiler_state_new(void) {
     "Create a fresh compiler state with all maps initialized.";
     {
         CompilerState s = (CompilerState){NULL, NULL, 0, strmap_strmap_new(64), strmap_strmap_new(32), strmap_strmap_new(32), strmap_strmap_new(32), strmap_strmap_new(16), strmap_strmap_new(16), strmap_strmap_new(64), strmap_strmap_new(64), strmap_strmap_new(32), strmap_strmap_new(16), strmap_strmap_new(32), strmap_strmap_new(32), strmap_strmap_new(16), strmap_strmap_new(16), strmap_strmap_new(16), strmap_strmap_new(16), strmap_strset_new(16), strmap_strset_new(16), strmap_strset_new(16), strmap_strset_new(16), strmap_strmap_new(32), strmap_strmap_new(16), NULL, NULL, 0, 0, NULL, 0, 0, 0, 0, 0};
-        s.lines = mp_writer_new(4096);
+        s.lines = nr_writer_new(4096);
         return s;
     }
 }
@@ -104,13 +104,13 @@ FieldList* native_compiler_state_field_list_new(int32_t count) {
     return fl;
 }
 
-MpStr* native_compiler_state_field_list_find(const FieldList* restrict fl, const MpStr* restrict name) {
+NrStr* native_compiler_state_field_list_find(const FieldList* restrict fl, const NrStr* restrict name) {
     "Find a field by name, return its ctype or NULL.";
     if ((fl == NULL)) {
         return NULL;
     }
     for (int64_t i = 0; i < fl->count; i++) {
-        if (mp_str_eq(fl->entries[i].name, name)) {
+        if (nr_str_eq(fl->entries[i].name, name)) {
             return fl->entries[i].ctype;
         }
     }

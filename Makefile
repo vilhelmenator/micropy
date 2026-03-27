@@ -1,8 +1,8 @@
-# Micropy — build the native bootstrap compiler
+# Nathra — build the native bootstrap compiler
 #
 # Usage:
 #   make                 Build the native compiler dylib from pre-generated C
-#   make regenerate      Regenerate C from .mpy sources (needs Python compiler)
+#   make regenerate      Regenerate C from .nth sources (needs Python compiler)
 #   make test            Run the test suite
 #   make bootstrap       Run bootstrap verification
 #   make clean           Remove build artifacts
@@ -49,7 +49,7 @@ $(DYLIB): $(OBJS)
 	@echo ""
 	@echo "Built $(DYLIB)"
 
-# Regenerate native/generated/ from native/src/*.mpy (requires Python compiler)
+# Regenerate native/generated/ from native/src/*.nth (requires Python compiler)
 regenerate:
 	python3 scripts/regenerate.py
 
@@ -58,7 +58,7 @@ test:
 	@python3 -c "\
 	import subprocess, glob, sys; \
 	sys.path.insert(0, '.'); \
-	tests = sorted(glob.glob('tests/test_*.mpy')); \
+	tests = sorted(glob.glob('tests/test_*.nth')); \
 	fails = []; \
 	[fails.append(t) for t in tests \
 	 if subprocess.run(['python3', 'compiler/compiler.py', t], \

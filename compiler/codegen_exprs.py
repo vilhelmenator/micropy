@@ -4,57 +4,57 @@ import sys
 from compiler.type_map import TYPE_MAP, mangle_type
 
 # Builtin function parameter types — enables auto-coercion of string literals
-# to stack MpStr* compound literals in any call position where the param is MpStr*.
+# to stack NrStr* compound literals in any call position where the param is NrStr*.
 _BUILTIN_PARAM_TYPES: dict[str, list[str]] = {
-    "str_len": ["MpStr*"],
-    "str_eq": ["MpStr*", "MpStr*"],
-    "str_concat": ["MpStr*", "MpStr*"],
-    "str_free": ["MpStr*"],
-    "str_contains": ["MpStr*", "MpStr*"],
-    "str_starts_with": ["MpStr*", "MpStr*"],
-    "str_ends_with": ["MpStr*", "MpStr*"],
-    "str_slice": ["MpStr*", "int64_t", "int64_t"],
-    "str_find": ["MpStr*", "MpStr*"],
-    "str_upper": ["MpStr*"],
-    "str_lower": ["MpStr*"],
-    "str_repeat": ["MpStr*", "int64_t"],
-    "str_strip": ["MpStr*"],
-    "str_lstrip": ["MpStr*"],
-    "str_rstrip": ["MpStr*"],
-    "str_split": ["MpStr*", "MpStr*"],
+    "str_len": ["NrStr*"],
+    "str_eq": ["NrStr*", "NrStr*"],
+    "str_concat": ["NrStr*", "NrStr*"],
+    "str_free": ["NrStr*"],
+    "str_contains": ["NrStr*", "NrStr*"],
+    "str_starts_with": ["NrStr*", "NrStr*"],
+    "str_ends_with": ["NrStr*", "NrStr*"],
+    "str_slice": ["NrStr*", "int64_t", "int64_t"],
+    "str_find": ["NrStr*", "NrStr*"],
+    "str_upper": ["NrStr*"],
+    "str_lower": ["NrStr*"],
+    "str_repeat": ["NrStr*", "int64_t"],
+    "str_strip": ["NrStr*"],
+    "str_lstrip": ["NrStr*"],
+    "str_rstrip": ["NrStr*"],
+    "str_split": ["NrStr*", "NrStr*"],
     "str_new": ["const char*"],
     "str_from_int": ["int64_t"],
     "str_from_float": ["double"],
     "str_format": ["const char*"],  # variadic, but first arg is char*
-    "print_str": ["MpStr*"],
+    "print_str": ["NrStr*"],
     "print_int": ["int64_t"],
     "print_float": ["double"],
     "print_bool": ["int"],
-    "val_str": ["MpStr*"],
-    "file_write_str": ["MpFile", "MpStr*"],
-    "write_text": ["MpWriter*", "MpStr*"],
+    "val_str": ["NrStr*"],
+    "file_write_str": ["NrFile", "NrStr*"],
+    "write_text": ["NrWriter*", "NrStr*"],
 }
 
 # os.func() aliases → same runtime functions as the existing builtins
 _OS_FUNCS: dict[str, str] = {
-    "exists": "mp_file_exists",
-    "file_size": "mp_file_size",
-    "remove": "mp_remove",
-    "rename": "mp_rename",
-    "mkdir": "mp_dir_create",
-    "rmdir": "mp_dir_remove",
-    "isdir": "mp_dir_exists",
-    "getcwd": "mp_dir_cwd",
-    "listdir": "mp_dir_list",
-    "chdir": "mp_dir_chdir",
+    "exists": "nr_file_exists",
+    "file_size": "nr_file_size",
+    "remove": "nr_remove",
+    "rename": "nr_rename",
+    "mkdir": "nr_dir_create",
+    "rmdir": "nr_dir_remove",
+    "isdir": "nr_dir_exists",
+    "getcwd": "nr_dir_cwd",
+    "listdir": "nr_dir_list",
+    "chdir": "nr_dir_chdir",
 }
 
 # os.path.func() aliases
 _OS_PATH_FUNCS: dict[str, str] = {
-    "join": "mp_path_join",
-    "basename": "mp_path_basename",
-    "dirname": "mp_path_dirname",
-    "ext": "mp_path_ext",
+    "join": "nr_path_join",
+    "basename": "nr_path_basename",
+    "dirname": "nr_path_dirname",
+    "ext": "nr_path_ext",
 }
 
 
@@ -65,14 +65,14 @@ class ExprMixin:
 
     def _dict_key_expr(self, node, key_type: str) -> str:
         """Compile a dict key expression to char* for the runtime API.
-        String literals → bare "literal", MpStr* variables → var->data."""
+        String literals → bare "literal", NrStr* variables → var->data."""
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             _s = node.value
             _esc = _s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
             return f'"{_esc}"'
         compiled = self.compile_expr(node)
-        if key_type == "MpStr*":
-            # MpStr* variable → extract .data for char* API
+        if key_type == "NrStr*":
+            # NrStr* variable → extract .data for char* API
             return f"({compiled})->data"
         return compiled
 
@@ -97,7 +97,7 @@ class ExprMixin:
                   file=sys.stderr)
             raise CompileError(f"dereference of provably null pointer '{var_name}'")
         if state == "unknown" and self.safe_mode:
-            self.emit(f"mp_safe_null_check({compiled_expr}, __FILE__, __LINE__);")
+            self.emit(f"nr_safe_null_check({compiled_expr}, __FILE__, __LINE__);")
 
     # -------------------------------------------------------------------
     # Expressions
@@ -142,14 +142,14 @@ class ExprMixin:
             # List + concatenation
             if isinstance(node.op, ast.Add):
                 left_type = self.infer_type(node.left)
-                if left_type == "MpList*":
+                if left_type == "NrList*":
                     left = self.compile_expr(node.left)
                     right = self.compile_expr(node.right)
-                    return f"mp_list_concat({left}, {right})"
+                    return f"nr_list_concat({left}, {right})"
             # String + concatenation
             if isinstance(node.op, ast.Add):
                 left_type = self.infer_type(node.left)
-                if left_type == "MpStr*":
+                if left_type == "NrStr*":
                     left = self.compile_expr(node.left)
                     right = self.compile_expr(node.right)
                     # Auto-coerce string literals on either side
@@ -157,13 +157,13 @@ class ExprMixin:
                             and isinstance(node.left.value, str)):
                         _s = node.left.value
                         _esc = _s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                        left = f'(&(MpStr){{.data=(char*)"{_esc}",.len={len(_s)}}})'
+                        left = f'(&(NrStr){{.data=(char*)"{_esc}",.len={len(_s)}}})'
                     if (isinstance(node.right, ast.Constant)
                             and isinstance(node.right.value, str)):
                         _s = node.right.value
                         _esc = _s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                        right = f'(&(MpStr){{.data=(char*)"{_esc}",.len={len(_s)}}})'
-                    return f"mp_str_concat({left}, {right})"
+                        right = f'(&(NrStr){{.data=(char*)"{_esc}",.len={len(_s)}}})'
+                    return f"nr_str_concat({left}, {right})"
             # Operator overloading via __add__, __sub__, etc.
             left_type = self.infer_type(node.left)
             left_base = left_type.rstrip("*").strip()
@@ -199,15 +199,15 @@ class ExprMixin:
                                   "uint64_t", "uint32_t", "uint16_t", "uint8_t")
                 if _is_int:
                     if isinstance(node.op, (ast.Div, ast.FloorDiv)):
-                        return f"mp_safe_div_i64({left}, {right}, __FILE__, __LINE__)"
+                        return f"nr_safe_div_i64({left}, {right}, __FILE__, __LINE__)"
                     if isinstance(node.op, ast.Mod):
-                        return f"mp_safe_mod_i64({left}, {right}, __FILE__, __LINE__)"
+                        return f"nr_safe_mod_i64({left}, {right}, __FILE__, __LINE__)"
                     if isinstance(node.op, ast.Add):
-                        return f"mp_safe_add_i64({left}, {right}, __FILE__, __LINE__)"
+                        return f"nr_safe_add_i64({left}, {right}, __FILE__, __LINE__)"
                     if isinstance(node.op, ast.Sub):
-                        return f"mp_safe_sub_i64({left}, {right}, __FILE__, __LINE__)"
+                        return f"nr_safe_sub_i64({left}, {right}, __FILE__, __LINE__)"
                     if isinstance(node.op, ast.Mult):
-                        return f"mp_safe_mul_i64({left}, {right}, __FILE__, __LINE__)"
+                        return f"nr_safe_mul_i64({left}, {right}, __FILE__, __LINE__)"
             if isinstance(node.op, ast.FloorDiv):
                 return f"(({left}) / ({right}))"
             op = self.compile_op(node.op)
@@ -242,7 +242,7 @@ class ExprMixin:
             # String == / != comparison
             if len(node.ops) == 1 and len(node.comparators) == 1:
                 left_type = self.infer_type(node.left)
-                if left_type == "MpStr*":
+                if left_type == "NrStr*":
                     left = self.compile_expr(node.left)
                     right = self.compile_expr(node.comparators[0])
                     # Auto-coerce string literal comparands
@@ -250,16 +250,16 @@ class ExprMixin:
                     if isinstance(_rc, ast.Constant) and isinstance(_rc.value, str):
                         _s = _rc.value
                         _esc = _s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                        right = f'(&(MpStr){{.data=(char*)"{_esc}",.len={len(_s)}}})'
+                        right = f'(&(NrStr){{.data=(char*)"{_esc}",.len={len(_s)}}})'
                     _lc = node.left
                     if isinstance(_lc, ast.Constant) and isinstance(_lc.value, str):
                         _s = _lc.value
                         _esc = _s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                        left = f'(&(MpStr){{.data=(char*)"{_esc}",.len={len(_s)}}})'
+                        left = f'(&(NrStr){{.data=(char*)"{_esc}",.len={len(_s)}}})'
                     if isinstance(node.ops[0], ast.Eq):
-                        return f"mp_str_eq({left}, {right})"
+                        return f"nr_str_eq({left}, {right})"
                     if isinstance(node.ops[0], ast.NotEq):
-                        return f"(!mp_str_eq({left}, {right}))"
+                        return f"(!nr_str_eq({left}, {right}))"
             # Comparison operator overloading (__eq__, __lt__, etc.) for single comparisons
             if len(node.ops) == 1 and len(node.comparators) == 1:
                 left_type = self.infer_type(node.left)
@@ -281,20 +281,20 @@ class ExprMixin:
                 _comp = node.comparators[0]
                 _comp_type = self.infer_type(_comp)
                 # List `in`: linear scan via loop
-                if _comp_type == "MpList*" or (isinstance(_comp, ast.Name)
+                if _comp_type == "NrList*" or (isinstance(_comp, ast.Name)
                         and _comp.id in self._list_vars):
                     _lobj = self.compile_expr(_comp)
                     _lval = self.compile_expr(node.left)
                     _lvt = self.infer_type(node.left)
                     if _lvt == "double":
-                        _boxed = f"mp_val_float({_lval})"
-                    elif _lvt == "MpStr*":
-                        _boxed = f"mp_val_str({_lval})"
+                        _boxed = f"nr_val_float({_lval})"
+                    elif _lvt == "NrStr*":
+                        _boxed = f"nr_val_str({_lval})"
                     else:
-                        _boxed = f"mp_val_int((int64_t)({_lval}))"
+                        _boxed = f"nr_val_int((int64_t)({_lval}))"
                     # Use a helper — emit inline scan
                     # For now, use list_contains if available, else val comparison
-                    _expr = f"mp_list_contains({_lobj}, {_boxed})"
+                    _expr = f"nr_list_contains({_lobj}, {_boxed})"
                     if isinstance(node.ops[0], ast.NotIn):
                         _expr = f"(!{_expr})"
                     return _expr
@@ -304,7 +304,7 @@ class ExprMixin:
                         _dk_type, _dv_type = _dinfo
                         _dobj = self.compile_expr(_comp)
                         _dkey = self._dict_key_expr(node.left, _dk_type)
-                        expr = f"mp_dict_has({_dobj}, {_dkey})"
+                        expr = f"nr_dict_has({_dobj}, {_dkey})"
                         if isinstance(node.ops[0], ast.NotIn):
                             expr = f"(!{expr})"
                         return expr
@@ -328,8 +328,8 @@ class ExprMixin:
                 _stype = self.infer_type(node.value)
                 _slow = self.compile_expr(node.slice.lower) if node.slice.lower else "0"
                 _sup = self.compile_expr(node.slice.upper) if node.slice.upper else f"{_sobj}->len"
-                if _stype == "MpList*":
-                    return f"mp_list_slice({_sobj}, {_slow}, {_sup})"
+                if _stype == "NrList*":
+                    return f"nr_list_slice({_sobj}, {_slow}, {_sup})"
                 # For arrays/pointers: return pointer + offset
                 return f"({_sobj} + {_slow})"
             # @soa: standalone whole-element subscript on SoA array is unsupported
@@ -348,22 +348,22 @@ class ExprMixin:
                     lst = self.compile_expr(node.value)
                     idx = self.compile_expr(node.slice)
                     if self.safe_mode:
-                        self.emit(f"mp_safe_bounds_check({idx}, {lst}->len, __FILE__, __LINE__);")
+                        self.emit(f"nr_safe_bounds_check({idx}, {lst}->len, __FILE__, __LINE__);")
                     return f"{list_name}_get({lst}, {idx})"
-            if self.infer_type(node.value) == "MpList*":
+            if self.infer_type(node.value) == "NrList*":
                 lst = self.compile_expr(node.value)
                 idx = self.compile_expr(node.slice)
                 if self.safe_mode:
-                    self.emit(f"mp_safe_bounds_check({idx}, {lst}->len, __FILE__, __LINE__);")
-                raw = f"mp_list_get({lst}, {idx})"
+                    self.emit(f"nr_safe_bounds_check({idx}, {lst}->len, __FILE__, __LINE__);")
+                raw = f"nr_list_get({lst}, {idx})"
                 if isinstance(node.value, ast.Name):
                     et = self._list_vars.get(node.value.id)
                     if et == "double":
-                        return f"mp_as_float({raw})"
-                    elif et == "MpStr*":
-                        return f"(MpStr*)(uintptr_t)mp_as_int({raw})"
+                        return f"nr_as_float({raw})"
+                    elif et == "NrStr*":
+                        return f"(NrStr*)(uintptr_t)nr_as_int({raw})"
                     elif et:
-                        return f"(({et})mp_as_int({raw}))"
+                        return f"(({et})nr_as_int({raw}))"
                 return raw
             # Dict subscript read: d["key"] → _dict_unbox_val(dict_get(d, "key"))
             if isinstance(node.value, ast.Name):
@@ -372,7 +372,7 @@ class ExprMixin:
                     _dk_type, _dv_type = _dinfo
                     _dobj = self.compile_expr(node.value)
                     _dkey = self._dict_key_expr(node.slice, _dk_type)
-                    _raw = f"mp_dict_get({_dobj}, {_dkey})"
+                    _raw = f"nr_dict_get({_dobj}, {_dkey})"
                     return self._dict_unbox_val(_raw, _dv_type)
             val = self.compile_expr(node.value)
             sl = self.compile_expr(node.slice)
@@ -381,7 +381,7 @@ class ExprMixin:
                 _ai = self._array_vars.get(node.value.id)
                 if _ai:
                     _asize = _ai[1]
-                    self.emit(f"mp_safe_bounds_check({sl}, {_asize}, __FILE__, __LINE__);")
+                    self.emit(f"nr_safe_bounds_check({sl}, {_asize}, __FILE__, __LINE__);")
             return f"{val}[{sl}]"
 
         if isinstance(node, ast.Attribute):
@@ -449,9 +449,9 @@ class ExprMixin:
             buf = f"_fstr_{self._fstr_counter}"
             arg_str = f', {", ".join(args)}' if args else ""
             self.emit(f'char {buf}[512]; snprintf({buf}, 512, "{fmt}"{arg_str});')
-            # Return as stack MpStr* so it works with str-typed variables
+            # Return as stack NrStr* so it works with str-typed variables
             svar = f"_fstr_s_{self._fstr_counter}"
-            self.emit(f'MpStr {svar} = {{.data={buf},.len=strlen({buf})}}; ')
+            self.emit(f'NrStr {svar} = {{.data={buf},.len=strlen({buf})}}; ')
             return f"(&{svar})"
 
         if isinstance(node, ast.List):
@@ -525,9 +525,9 @@ class ExprMixin:
 
         args = [self.compile_expr(a) for a in node.args]
 
-        # Auto-coerce string literal arguments to MpStr* compound literals.
+        # Auto-coerce string literal arguments to NrStr* compound literals.
         # Uses param type info from: user functions, struct methods, builtins.
-        # Only coerce when we positively know the param type is MpStr*.
+        # Only coerce when we positively know the param type is NrStr*.
         if isinstance(node.func, ast.Name):
             _callee = node.func.id
             _ptypes = self.func_param_types.get(_callee)
@@ -539,12 +539,12 @@ class ExprMixin:
             if _ptypes:
                 for _pi, _arg_node in enumerate(node.args):
                     if (_pi < len(_ptypes)
-                            and _ptypes[_pi] == "MpStr*"
+                            and _ptypes[_pi] == "NrStr*"
                             and isinstance(_arg_node, ast.Constant)
                             and isinstance(_arg_node.value, str)):
                         _s = _arg_node.value
                         _esc = _s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                        args[_pi] = f'(&(MpStr){{.data=(char*)"{_esc}",.len={len(_s)}}})'
+                        args[_pi] = f'(&(NrStr){{.data=(char*)"{_esc}",.len={len(_s)}}})'
 
         arg_str = ", ".join(args)
 
@@ -572,20 +572,20 @@ class ExprMixin:
                 if len(node.args) == 2:
                     cond = self.compile_expr(node.args[0])
                     msg  = self.compile_expr(node.args[1])
-                    return f"mp_test_assert_msg({cond}, {msg})"
-                return f"mp_test_assert({arg_str})"
+                    return f"nr_test_assert_msg({cond}, {msg})"
+                return f"nr_test_assert({arg_str})"
 
             if fname == "test_assert_eq":
-                return f"mp_test_assert_eq({arg_str})"
+                return f"nr_test_assert_eq({arg_str})"
 
             # heap_assert(expected) / heap_assert_delta(snap, delta)
             if fname == "heap_assert" and len(node.args) == 1:
                 val = self.compile_expr(node.args[0])
-                return f'mp_heap_assert({val}, __FILE__, __LINE__)'
+                return f'nr_heap_assert({val}, __FILE__, __LINE__)'
             if fname == "heap_assert_delta" and len(node.args) == 2:
                 snap = self.compile_expr(node.args[0])
                 delta = self.compile_expr(node.args[1])
-                return f'mp_heap_assert_delta({snap}, {delta}, __FILE__, __LINE__)'
+                return f'nr_heap_assert_delta({snap}, {delta}, __FILE__, __LINE__)'
 
             # sizeof with type name mapping
             if fname == "sizeof" and len(node.args) == 1:
@@ -658,100 +658,100 @@ class ExprMixin:
 
             # Built-in mappings
             builtins = {
-                "print_int": "mp_print_int", "print_float": "mp_print_float",
-                "print_str": "mp_print_str", "print_bool": "mp_print_bool",
-                "print_val": "mp_print_val",
-                "list_new": "mp_list_new", "list_append": "mp_list_append",
-                "list_get": "mp_list_get", "list_set": "mp_list_set",
-                "list_len": "mp_list_len", "list_pop": "mp_list_pop",
-                "list_free": "mp_list_free",
-                "dict_new": "mp_dict_new", "dict_set": "mp_dict_set",
-                "dict_get": "mp_dict_get", "dict_has": "mp_dict_has",
-                "dict_del": "mp_dict_del", "dict_len": "mp_dict_len",
-                "dict_free": "mp_dict_free",
-                "str_new": "mp_str_new", "str_len": "mp_str_len",
-                "str_concat": "mp_str_concat", "str_eq": "mp_str_eq",
-                "str_print": "mp_str_print", "str_free": "mp_str_free",
-                "str_from_int": "mp_str_from_int", "str_from_float": "mp_str_from_float",
-                "str_contains": "mp_str_contains", "str_starts_with": "mp_str_starts_with",
-                "str_ends_with": "mp_str_ends_with", "str_slice": "mp_str_slice",
-                "str_find": "mp_str_find", "str_upper": "mp_str_upper",
-                "str_lower": "mp_str_lower", "str_repeat": "mp_str_repeat",
-                "to_int": "mp_val_to_int", "to_float": "mp_val_to_float",
-                "as_int": "mp_as_int", "as_float": "mp_as_float",
-                "val_int": "mp_val_int", "val_float": "mp_val_float",
-                "val_str": "mp_val_str",
+                "print_int": "nr_print_int", "print_float": "nr_print_float",
+                "print_str": "nr_print_str", "print_bool": "nr_print_bool",
+                "print_val": "nr_print_val",
+                "list_new": "nr_list_new", "list_append": "nr_list_append",
+                "list_get": "nr_list_get", "list_set": "nr_list_set",
+                "list_len": "nr_list_len", "list_pop": "nr_list_pop",
+                "list_free": "nr_list_free",
+                "dict_new": "nr_dict_new", "dict_set": "nr_dict_set",
+                "dict_get": "nr_dict_get", "dict_has": "nr_dict_has",
+                "dict_del": "nr_dict_del", "dict_len": "nr_dict_len",
+                "dict_free": "nr_dict_free",
+                "str_new": "nr_str_new", "str_len": "nr_str_len",
+                "str_concat": "nr_str_concat", "str_eq": "nr_str_eq",
+                "str_print": "nr_str_print", "str_free": "nr_str_free",
+                "str_from_int": "nr_str_from_int", "str_from_float": "nr_str_from_float",
+                "str_contains": "nr_str_contains", "str_starts_with": "nr_str_starts_with",
+                "str_ends_with": "nr_str_ends_with", "str_slice": "nr_str_slice",
+                "str_find": "nr_str_find", "str_upper": "nr_str_upper",
+                "str_lower": "nr_str_lower", "str_repeat": "nr_str_repeat",
+                "to_int": "nr_val_to_int", "to_float": "nr_val_to_float",
+                "as_int": "nr_as_int", "as_float": "nr_as_float",
+                "val_int": "nr_val_int", "val_float": "nr_val_float",
+                "val_str": "nr_val_str",
                 "alloc": "malloc", "free": "free", "sizeof": "sizeof",
-                "arena_new": "mp_arena_new", "arena_free": "mp_arena_free",
-                "arena_reset": "mp_arena_reset", "arena_alloc": "mp_arena_alloc",
-                "arena_list_new": "mp_arena_list_new",
-                "arena_str_new": "mp_arena_str_new",
-                "arena_str_new_len": "mp_arena_str_new_len",
-                "read_file_bin": "mp_read_file_bin",
-                "write_file_bin": "mp_write_file_bin",
-                "open": "mp_file_open",
-                "file_open": "mp_file_open", "file_open_safe": "mp_file_open_safe",
-                "file_close": "mp_file_close",
-                "file_write": "mp_file_write", "file_write_str": "mp_file_write_str",
-                "file_write_line": "mp_file_write_line",
-                "file_write_int": "mp_file_write_int",
-                "file_write_float": "mp_file_write_float",
-                "file_read_all": "mp_file_read_all",
-                "file_read_line": "mp_file_read_line",
-                "file_eof": "mp_file_eof",
-                "file_exists": "mp_file_exists", "file_size": "mp_file_size",
-                "dir_create": "mp_dir_create", "dir_remove": "mp_dir_remove",
-                "dir_exists": "mp_dir_exists", "dir_list": "mp_dir_list",
-                "dir_cwd": "mp_dir_cwd", "dir_chdir": "mp_dir_chdir",
-                "path_join": "mp_path_join", "path_ext": "mp_path_ext",
-                "path_basename": "mp_path_basename", "path_dirname": "mp_path_dirname",
-                "remove_file": "mp_remove", "rename_file": "mp_rename",
-                "thread_spawn": "mp_thread_spawn", "thread_join": "mp_thread_join",
-                "mutex_new": "mp_mutex_new", "mutex_lock": "mp_mutex_lock",
-                "mutex_unlock": "mp_mutex_unlock", "mutex_free": "mp_mutex_free",
-                "cond_new": "mp_cond_new", "cond_wait": "mp_cond_wait",
-                "cond_signal": "mp_cond_signal", "cond_broadcast": "mp_cond_broadcast",
-                "cond_free": "mp_cond_free",
-                "sleep_ms": "mp_sleep_ms",
-                "atomic_add": "mp_atomic_add", "atomic_sub": "mp_atomic_sub",
-                "atomic_load": "mp_atomic_load", "atomic_store": "mp_atomic_store",
-                "atomic_cas": "mp_atomic_cas",
-                "channel_new": "mp_channel_new", "channel_send": "mp_channel_send",
-                "channel_recv": "mp_channel_recv", "channel_close": "mp_channel_close",
-                "channel_free": "mp_channel_free",
-                "channel_recv_val": "mp_channel_recv_val",
-                "channel_drain": "mp_channel_drain",
-                "channel_has_data": "mp_channel_has_data",
-                "pool_new": "mp_pool_new", "pool_submit": "mp_pool_submit",
-                "pool_shutdown": "mp_pool_shutdown",
-                "parallel_for": "mp_parallel_for",
-                "heap_allocated": "mp_heap_allocated",
-                "rand_seed": "mp_rand_seed", "rand_int": "mp_rand_int",
-                "rand_float": "mp_rand_float",
-                "time_now": "mp_time_now", "time_ms": "mp_time_ms",
-                "str_format": "mp_str_format",
-                "str_strip": "mp_str_strip", "str_lstrip": "mp_str_lstrip",
-                "str_rstrip": "mp_str_rstrip", "str_split": "mp_str_split",
-                "write_text": "mp_write_text",
-                "writer_new": "mp_writer_new", "writer_free": "mp_writer_free",
-                "writer_pos": "mp_writer_pos",
-                "write_bytes": "mp_write_bytes",
-                "write_i8": "mp_write_i8", "write_i16": "mp_write_i16",
-                "write_i32": "mp_write_i32", "write_i64": "mp_write_i64",
-                "write_u8": "mp_write_u8", "write_u16": "mp_write_u16",
-                "write_u32": "mp_write_u32", "write_u64": "mp_write_u64",
-                "write_f32": "mp_write_f32", "write_f64": "mp_write_f64",
-                "write_bool": "mp_write_bool", "write_str": "mp_write_str",
-                "writer_to_bytes": "mp_writer_to_bytes",
-                "reader_new": "mp_reader_new", "reader_free": "mp_reader_free",
-                "reader_pos": "mp_reader_pos",
-                "read_bytes": "mp_read_bytes",
-                "read_i8": "mp_read_i8", "read_i16": "mp_read_i16",
-                "read_i32": "mp_read_i32", "read_i64": "mp_read_i64",
-                "read_u8": "mp_read_u8", "read_u16": "mp_read_u16",
-                "read_u32": "mp_read_u32", "read_u64": "mp_read_u64",
-                "read_f32": "mp_read_f32", "read_f64": "mp_read_f64",
-                "read_bool": "mp_read_bool", "read_str": "mp_read_str",
+                "arena_new": "nr_arena_new", "arena_free": "nr_arena_free",
+                "arena_reset": "nr_arena_reset", "arena_alloc": "nr_arena_alloc",
+                "arena_list_new": "nr_arena_list_new",
+                "arena_str_new": "nr_arena_str_new",
+                "arena_str_new_len": "nr_arena_str_new_len",
+                "read_file_bin": "nr_read_file_bin",
+                "write_file_bin": "nr_write_file_bin",
+                "open": "nr_file_open",
+                "file_open": "nr_file_open", "file_open_safe": "nr_file_open_safe",
+                "file_close": "nr_file_close",
+                "file_write": "nr_file_write", "file_write_str": "nr_file_write_str",
+                "file_write_line": "nr_file_write_line",
+                "file_write_int": "nr_file_write_int",
+                "file_write_float": "nr_file_write_float",
+                "file_read_all": "nr_file_read_all",
+                "file_read_line": "nr_file_read_line",
+                "file_eof": "nr_file_eof",
+                "file_exists": "nr_file_exists", "file_size": "nr_file_size",
+                "dir_create": "nr_dir_create", "dir_remove": "nr_dir_remove",
+                "dir_exists": "nr_dir_exists", "dir_list": "nr_dir_list",
+                "dir_cwd": "nr_dir_cwd", "dir_chdir": "nr_dir_chdir",
+                "path_join": "nr_path_join", "path_ext": "nr_path_ext",
+                "path_basename": "nr_path_basename", "path_dirname": "nr_path_dirname",
+                "remove_file": "nr_remove", "rename_file": "nr_rename",
+                "thread_spawn": "nr_thread_spawn", "thread_join": "nr_thread_join",
+                "mutex_new": "nr_mutex_new", "mutex_lock": "nr_mutex_lock",
+                "mutex_unlock": "nr_mutex_unlock", "mutex_free": "nr_mutex_free",
+                "cond_new": "nr_cond_new", "cond_wait": "nr_cond_wait",
+                "cond_signal": "nr_cond_signal", "cond_broadcast": "nr_cond_broadcast",
+                "cond_free": "nr_cond_free",
+                "sleep_ms": "nr_sleep_ms",
+                "atomic_add": "nr_atomic_add", "atomic_sub": "nr_atomic_sub",
+                "atomic_load": "nr_atomic_load", "atomic_store": "nr_atomic_store",
+                "atomic_cas": "nr_atomic_cas",
+                "channel_new": "nr_channel_new", "channel_send": "nr_channel_send",
+                "channel_recv": "nr_channel_recv", "channel_close": "nr_channel_close",
+                "channel_free": "nr_channel_free",
+                "channel_recv_val": "nr_channel_recv_val",
+                "channel_drain": "nr_channel_drain",
+                "channel_has_data": "nr_channel_has_data",
+                "pool_new": "nr_pool_new", "pool_submit": "nr_pool_submit",
+                "pool_shutdown": "nr_pool_shutdown",
+                "parallel_for": "nr_parallel_for",
+                "heap_allocated": "nr_heap_allocated",
+                "rand_seed": "nr_rand_seed", "rand_int": "nr_rand_int",
+                "rand_float": "nr_rand_float",
+                "time_now": "nr_time_now", "time_ms": "nr_time_ms",
+                "str_format": "nr_str_format",
+                "str_strip": "nr_str_strip", "str_lstrip": "nr_str_lstrip",
+                "str_rstrip": "nr_str_rstrip", "str_split": "nr_str_split",
+                "write_text": "nr_write_text",
+                "writer_new": "nr_writer_new", "writer_free": "nr_writer_free",
+                "writer_pos": "nr_writer_pos",
+                "write_bytes": "nr_write_bytes",
+                "write_i8": "nr_write_i8", "write_i16": "nr_write_i16",
+                "write_i32": "nr_write_i32", "write_i64": "nr_write_i64",
+                "write_u8": "nr_write_u8", "write_u16": "nr_write_u16",
+                "write_u32": "nr_write_u32", "write_u64": "nr_write_u64",
+                "write_f32": "nr_write_f32", "write_f64": "nr_write_f64",
+                "write_bool": "nr_write_bool", "write_str": "nr_write_str",
+                "writer_to_bytes": "nr_writer_to_bytes",
+                "reader_new": "nr_reader_new", "reader_free": "nr_reader_free",
+                "reader_pos": "nr_reader_pos",
+                "read_bytes": "nr_read_bytes",
+                "read_i8": "nr_read_i8", "read_i16": "nr_read_i16",
+                "read_i32": "nr_read_i32", "read_i64": "nr_read_i64",
+                "read_u8": "nr_read_u8", "read_u16": "nr_read_u16",
+                "read_u32": "nr_read_u32", "read_u64": "nr_read_u64",
+                "read_f32": "nr_read_f32", "read_f64": "nr_read_f64",
+                "read_bool": "nr_read_bool", "read_str": "nr_read_str",
             }
             if fname in builtins:
                 return f"{builtins[fname]}({arg_str})"
@@ -843,13 +843,13 @@ class ExprMixin:
             arg = node.args[0]
             t = self.infer_type(arg)
             expr = self.compile_expr(arg)
-            if t == "MpStr*":
+            if t == "NrStr*":
                 return expr
             if t == "double":
-                return f"mp_str_from_float({expr})"
+                return f"nr_str_from_float({expr})"
             if t in ("char*", "cstr"):
-                return f"mp_str_new({expr})"
-            return f"mp_str_from_int((int64_t)({expr}))"
+                return f"nr_str_new({expr})"
+            return f"nr_str_from_int((int64_t)({expr}))"
         cast_map = {"cast_int": "int64_t", "cast_float": "double",
                     "cast_byte": "uint8_t", "cast_bool": "int"}
         if fname in cast_map:
@@ -899,10 +899,10 @@ class ExprMixin:
             return f'({{ fprintf(stderr, "%s\\n", {msg}); abort(); 0; }})'
         if fname == "is_ok" and len(node.args) == 1:
             expr = self.compile_expr(node.args[0])
-            return f"MP_LIKELY(({expr})._ok)"
+            return f"NR_LIKELY(({expr})._ok)"
         if fname == "is_err" and len(node.args) == 1:
             expr = self.compile_expr(node.args[0])
-            return f"MP_UNLIKELY(!({expr})._ok)"
+            return f"NR_UNLIKELY(!({expr})._ok)"
         if fname == "unwrap" and len(node.args) == 1:
             t = self.infer_type(node.args[0])
             expr = self.compile_expr(node.args[0])
@@ -956,7 +956,7 @@ class ExprMixin:
     def _call_getenv(self, node):
         arg = node.args[0]
         expr = self.compile_expr(arg)
-        if not isinstance(arg, ast.Constant) and self.infer_type(arg) == "MpStr*":
+        if not isinstance(arg, ast.Constant) and self.infer_type(arg) == "NrStr*":
             return f"mp_getenv(({expr})->data)"
         return f"mp_getenv({expr})"
 
@@ -976,13 +976,13 @@ class ExprMixin:
         t_base = t.rstrip("*").strip()
         if t_base in self.structs and f"{t_base}___len__" in self.func_ret_types:
             return f"{t_base}___len__(&({arg_expr}))"
-        if t == "MpStr*":
-            return f"mp_str_len({arg_expr})"
-        if t == "MpList*":
-            return f"mp_list_len({arg_expr})"
+        if t == "NrStr*":
+            return f"nr_str_len({arg_expr})"
+        if t == "NrList*":
+            return f"nr_list_len({arg_expr})"
         if t.endswith("*"):
             return f"{arg_expr}->len"
-        return f"mp_list_len({arg_expr})"
+        return f"nr_list_len({arg_expr})"
 
     def _call_method(self, node, args, arg_str):
         """Handle attribute-based calls: obj.method(args)."""
@@ -1011,12 +1011,12 @@ class ExprMixin:
         obj_str = self.compile_expr(obj)
         obj_type = self.infer_type(obj)
 
-        # Auto-coerce string literal to MpStr* for method calls
+        # Auto-coerce string literal to NrStr* for method calls
         if (isinstance(obj, ast.Constant) and isinstance(obj.value, str)):
             _s = obj.value
             _esc = _s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-            obj_str = f'(&(MpStr){{.data=(char*)"{_esc}",.len={len(_s)}}})'
-            obj_type = "MpStr*"
+            obj_str = f'(&(NrStr){{.data=(char*)"{_esc}",.len={len(_s)}}})'
+            obj_type = "NrStr*"
 
         # Generated typed list dispatch (struct element types, no boxing)
         if isinstance(obj, ast.Name):
@@ -1031,34 +1031,34 @@ class ExprMixin:
                 if attr == "len" and not node.args:
                     return f"{_lname}_len({obj_str})"
 
-        # MpList* method dispatch with auto-boxing/unboxing
-        if obj_type == "MpList*":
+        # NrList* method dispatch with auto-boxing/unboxing
+        if obj_type == "NrList*":
             def _box(a_node):
                 e = self.compile_expr(a_node)
                 t = self.infer_type(a_node)
-                if t == "double": return f"mp_val_float({e})"
-                if t == "MpStr*": return f"mp_val_str({e})"
-                return f"mp_val_int((int64_t)({e}))"
+                if t == "double": return f"nr_val_float({e})"
+                if t == "NrStr*": return f"nr_val_str({e})"
+                return f"nr_val_int((int64_t)({e}))"
             elem_type = self._list_vars.get(obj.id) if isinstance(obj, ast.Name) else None
             if attr == "append" and len(node.args) == 1:
-                return f"mp_list_append({obj_str}, {_box(node.args[0])})"
+                return f"nr_list_append({obj_str}, {_box(node.args[0])})"
             if attr == "pop" and not node.args:
-                raw = f"mp_list_pop({obj_str})"
-                if elem_type == "double": return f"mp_as_float({raw})"
-                if elem_type == "MpStr*": return f"(MpStr*)(uintptr_t)mp_as_int({raw})"
-                if elem_type: return f"(({elem_type})mp_as_int({raw}))"
+                raw = f"nr_list_pop({obj_str})"
+                if elem_type == "double": return f"nr_as_float({raw})"
+                if elem_type == "NrStr*": return f"(NrStr*)(uintptr_t)nr_as_int({raw})"
+                if elem_type: return f"(({elem_type})nr_as_int({raw}))"
                 return raw
             if attr == "len" and not node.args:
-                return f"mp_list_len({obj_str})"
+                return f"nr_list_len({obj_str})"
 
-        # MpFile method dispatch
-        if obj_type == "MpFile":
+        # NrFile method dispatch
+        if obj_type == "NrFile":
             _file_methods = {
-                "write_line":  "mp_file_write_line",
-                "write_int":   "mp_file_write_int",
-                "write_float": "mp_file_write_float",
-                "close":       "mp_file_close",
-                "eof":         "mp_file_eof",
+                "write_line":  "nr_file_write_line",
+                "write_int":   "nr_file_write_int",
+                "write_float": "nr_file_write_float",
+                "close":       "nr_file_close",
+                "eof":         "nr_file_eof",
             }
             if attr in _file_methods:
                 return f"{_file_methods[attr]}({obj_str}, {arg_str})" if arg_str else f"{_file_methods[attr]}({obj_str})"
@@ -1066,13 +1066,13 @@ class ExprMixin:
                 arg_node = node.args[0]
                 arg_val = self.compile_expr(arg_node)
                 is_str_obj = (not isinstance(arg_node, ast.Constant) and
-                              self.infer_type(arg_node) == "MpStr*")
-                fn = "mp_file_write_str" if is_str_obj else "mp_file_write"
+                              self.infer_type(arg_node) == "NrStr*")
+                fn = "nr_file_write_str" if is_str_obj else "nr_file_write"
                 return f"{fn}({obj_str}, {arg_val})"
             if attr == "read" and not node.args:
-                return f"mp_file_read_all({obj_str})"
+                return f"nr_file_read_all({obj_str})"
             if attr == "readline" and not node.args:
-                return f"mp_file_read_line({obj_str})"
+                return f"nr_file_read_line({obj_str})"
 
         base = obj_type.rstrip("*").strip()
         if obj_type.endswith("*") or base in self.structs:
@@ -1167,14 +1167,14 @@ class ExprMixin:
                 elif t == "int":
                     fmt_parts.append("%d")
                     c_args.append(f"(int)({expr})")
-                elif t == "MpStr*":
+                elif t == "NrStr*":
                     fmt_parts.append("%.*s")
                     c_args.append(f"(int)(({expr})->len)")
                     c_args.append(f"(({expr})->data)")
                 elif t in self.structs and f"{t}___str__" in self.func_ret_types:
                     str_ret = self.func_ret_types[f"{t}___str__"]
                     str_call = f"{t}___str__(&({expr}))"
-                    if str_ret == "MpStr*":
+                    if str_ret == "NrStr*":
                         fmt_parts.append("%.*s")
                         c_args.append(f"(int)(({str_call})->len)")
                         c_args.append(f"(({str_call})->data)")
@@ -1225,17 +1225,17 @@ class ExprMixin:
             else:
                 self.emit(f'printf("%lld", (long long){elem_expr});')
         else:
-            # MpList* with MpVal elements
+            # NrList* with NrVal elements
             self.emit(f"for (int64_t {idx} = 0; {idx} < {expr}->len; {idx}++) {{")
             self.indent += 1
             self.emit(f"if ({idx} > 0) printf(\", \");")
             raw = f"{expr}->data[{idx}]"
             if elem_t == "double":
-                self.emit(f"printf(\"%.6g\", mp_as_float({raw}));")
-            elif elem_t == "MpStr*":
-                self.emit(f"{{ MpStr* _ps = (MpStr*)(uintptr_t)mp_as_int({raw}); printf(\"%.*s\", (int)_ps->len, _ps->data); }}")
+                self.emit(f"printf(\"%.6g\", nr_as_float({raw}));")
+            elif elem_t == "NrStr*":
+                self.emit(f"{{ NrStr* _ps = (NrStr*)(uintptr_t)nr_as_int({raw}); printf(\"%.*s\", (int)_ps->len, _ps->data); }}")
             else:
-                self.emit(f"printf(\"%lld\", (long long)mp_as_int({raw}));")
+                self.emit(f"printf(\"%lld\", (long long)nr_as_int({raw}));")
         self.indent -= 1
         self.emit("}")
         self.emit('printf("]\\n");')
@@ -1246,7 +1246,7 @@ class ExprMixin:
         # If any arg is a list type, emit loop-based printing and return a no-op
         for arg in args:
             t = self.infer_type(arg)
-            is_list = (t == "MpList*") or (
+            is_list = (t == "NrList*") or (
                 isinstance(arg, ast.Name)
                 and self._list_vars.get(arg.id) in self.typed_lists
             )
@@ -1254,7 +1254,7 @@ class ExprMixin:
                 # Emit each arg: non-list ones via printf, list ones via loop
                 for a in args:
                     ta = self.infer_type(a)
-                    ia = (ta == "MpList*") or (
+                    ia = (ta == "NrList*") or (
                         isinstance(a, ast.Name)
                         and self._list_vars.get(a.id) in self.typed_lists
                     )
@@ -1264,7 +1264,7 @@ class ExprMixin:
                         ea = self.compile_expr(a)
                         if ta == "double":
                             self.emit(f'printf("%.6g\\n", {ea});')
-                        elif ta == "MpStr*":
+                        elif ta == "NrStr*":
                             self.emit(f'printf("%.*s\\n", (int)(({ea})->len), ({ea})->data);')
                         else:
                             self.emit(f'printf("%lld\\n", (long long)({ea}));')
@@ -1292,7 +1292,7 @@ class ExprMixin:
             elif t == "int":
                 fmt_parts.append("%s")
                 c_args.append(f"(({expr}) ? \"True\" : \"False\")")
-            elif t == "MpStr*":
+            elif t == "NrStr*":
                 fmt_parts.append("%.*s")
                 c_args.append(f"(int)(({expr})->len)")
                 c_args.append(f"(({expr})->data)")
@@ -1303,7 +1303,7 @@ class ExprMixin:
                 # __str__ special method
                 str_ret = self.func_ret_types[f"{t}___str__"]
                 str_call = f"{t}___str__(&({expr}))"
-                if str_ret == "MpStr*":
+                if str_ret == "NrStr*":
                     fmt_parts.append("%.*s")
                     c_args.append(f"(int)(({str_call})->len)")
                     c_args.append(f"(({str_call})->data)")
@@ -1351,7 +1351,7 @@ class ExprMixin:
             # Complex expression, fall back to raw spawn
             func_expr = self.compile_expr(func_node)
             arg_expr = self.compile_expr(spawn_args[0]) if spawn_args else "NULL"
-            return f"mp_thread_spawn({func_expr}, {arg_expr})"
+            return f"nr_thread_spawn({func_expr}, {arg_expr})"
 
         # Check if target function is known and takes typed args
         target_info = None
@@ -1365,7 +1365,7 @@ class ExprMixin:
         # If only 1 spawn arg, or target takes (void*), use raw spawn
         if len(spawn_args) <= 1:
             arg_expr = self.compile_expr(spawn_args[0]) if spawn_args else "NULL"
-            return f"mp_thread_spawn({target_name}, {arg_expr})"
+            return f"nr_thread_spawn({target_name}, {arg_expr})"
 
         # If target function is known, use its arg types
         # Otherwise infer from the spawn call arguments
@@ -1440,10 +1440,10 @@ class ExprMixin:
         for s in stmts:
             self.emit(f"{s};")
 
-        return f"mp_thread_spawn({trampoline_name}, {alloc_var})"
+        return f"nr_thread_spawn({trampoline_name}, {alloc_var})"
 
     def _compile_listcomp(self, node: ast.ListComp) -> str:
-        """Compile [elt for target in iter if cond ...] into a typed or MpList* temp."""
+        """Compile [elt for target in iter if cond ...] into a typed or NrList* temp."""
         self._lc_counter += 1
         lc_var = f"_lc_{self._lc_counter}"
         # Determine element type before emitting so we can pick the right list type
@@ -1452,7 +1452,7 @@ class ExprMixin:
         if _gen_list:
             self.emit(f"{_gen_list}* {lc_var} = {_gen_list}_new();")
         else:
-            self.emit(f"MpList* {lc_var} = mp_list_new();")
+            self.emit(f"NrList* {lc_var} = nr_list_new();")
 
         # Only handle single generator
         gen = node.generators[0]
@@ -1494,7 +1494,7 @@ class ExprMixin:
             idx = f"_lci_{self._lc_counter}"
             self.emit(f"for (int64_t {idx} = 0; {idx} < {iter_node.id}->len; {idx}++) {{")
             self.indent += 1
-            self.emit(f"{et} {target_name} = ({et})mp_as_int({iter_node.id}->data[{idx}]);")
+            self.emit(f"{et} {target_name} = ({et})nr_as_int({iter_node.id}->data[{idx}]);")
             self.local_vars[target_name] = et
             elem_type = et
 
@@ -1515,11 +1515,11 @@ class ExprMixin:
         if _gen_list:
             self.emit(f"{_gen_list}_append({lc_var}, {elt_expr});")
         elif elt_type == "double":
-            self.emit(f"mp_list_append({lc_var}, mp_val_float({elt_expr}));")
-        elif elt_type == "MpStr*":
-            self.emit(f"mp_list_append({lc_var}, mp_val_str({elt_expr}));")
+            self.emit(f"nr_list_append({lc_var}, nr_val_float({elt_expr}));")
+        elif elt_type == "NrStr*":
+            self.emit(f"nr_list_append({lc_var}, nr_val_str({elt_expr}));")
         else:
-            self.emit(f"mp_list_append({lc_var}, mp_val_int((int64_t)({elt_expr})));")
+            self.emit(f"nr_list_append({lc_var}, nr_val_int((int64_t)({elt_expr})));")
 
         # --- Close all opened blocks ---
         for _ in range(opened_blocks):

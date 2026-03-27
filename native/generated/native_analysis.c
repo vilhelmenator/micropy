@@ -1,9 +1,9 @@
-/* mpy_stamp: 1774564649.180125 */
-#include "micropy_rt.h"
+/* nth_stamp: 1774645808.931380 */
+#include "nathra_rt.h"
 #include "native_analysis.h"
 
-int64_t native_analysis__is_alloc_func(const MpStr* name);
-int64_t native_analysis__is_free_func(const MpStr* name);
+int64_t native_analysis__is_alloc_func(const NrStr* name);
+int64_t native_analysis__is_free_func(const NrStr* name);
 int64_t native_analysis__stmt_is_cold(const AstNode* restrict node, const StrSet* restrict cold_funcs);
 int64_t native_analysis__body_is_all_cold(AstNodeList body, StrSet* cold_funcs);
 void native_analysis_native_infer_cold_from_body(CompilerState* s, AstNodeList funcs);
@@ -12,18 +12,18 @@ int64_t native_analysis__has_free_of_param(AstNodeList body);
 void native_analysis_native_build_alloc_tags(CompilerState* s, AstNodeList funcs);
 int main(void);
 
-int64_t native_analysis__is_alloc_func(const MpStr* name) {
-    if ((mp_str_eq(name, (&(MpStr){.data=(char*)"alloc",.len=5})) || mp_str_eq(name, (&(MpStr){.data=(char*)"malloc",.len=6})))) {
+int64_t native_analysis__is_alloc_func(const NrStr* name) {
+    if ((nr_str_eq(name, (&(NrStr){.data=(char*)"alloc",.len=5})) || nr_str_eq(name, (&(NrStr){.data=(char*)"malloc",.len=6})))) {
         return 1;
     }
-    if (mp_str_eq(name, (&(MpStr){.data=(char*)"arena_alloc",.len=11}))) {
+    if (nr_str_eq(name, (&(NrStr){.data=(char*)"arena_alloc",.len=11}))) {
         return 1;
     }
     return 0;
 }
 
-int64_t native_analysis__is_free_func(const MpStr* name) {
-    if (mp_str_eq(name, (&(MpStr){.data=(char*)"free",.len=4}))) {
+int64_t native_analysis__is_free_func(const NrStr* name) {
+    if (nr_str_eq(name, (&(NrStr){.data=(char*)"free",.len=4}))) {
         return 1;
     }
     return 0;
@@ -45,7 +45,7 @@ int64_t native_analysis__stmt_is_cold(const AstNode* restrict node, const StrSet
             AstNode* pc_func = pc->func;
             if (((pc_func != NULL) && (pc_func->tag == TAG_NAME))) {
                 AstName* fn = pc_func->data;
-                if (mp_str_eq(fn->id, (&(MpStr){.data=(char*)"abort",.len=5}))) {
+                if (nr_str_eq(fn->id, (&(NrStr){.data=(char*)"abort",.len=5}))) {
                     return 1;
                 }
                 if (strmap_strset_has(cold_funcs, fn->id)) {
@@ -102,7 +102,7 @@ void native_analysis_native_infer_cold_from_body(CompilerState* s, AstNodeList f
                     AstNode* method = cd->body.items[j];
                     if (((method != NULL) && (method->tag == TAG_FUNCTION_DEF))) {
                         AstFunctionDef* md = method->data;
-                        MpStr* mname = mp_str_concat(mp_str_concat(cd->name, (&(MpStr){.data=(char*)"_",.len=1})), md->name);
+                        NrStr* mname = nr_str_concat(nr_str_concat(cd->name, (&(NrStr){.data=(char*)"_",.len=1})), md->name);
                         if ((strmap_strset_has((&s->cold_funcs), mname) == 0)) {
                             if (native_analysis__body_is_all_cold(md->body, (&s->cold_funcs))) {
                                 strmap_strset_add((&s->cold_funcs), mname);
@@ -182,7 +182,7 @@ void native_analysis_native_build_alloc_tags(CompilerState* s, AstNodeList funcs
             tags = (int32_t)((tags | 2));
         }
         if ((tags > 0)) {
-            strmap_strmap_set((&s->func_ret_types), mp_str_concat((&(MpStr){.data=(char*)"__alloc_tag_",.len=12}), fd->name), mp_str_from_int(((int64_t)(tags))));
+            strmap_strmap_set((&s->func_ret_types), nr_str_concat((&(NrStr){.data=(char*)"__alloc_tag_",.len=12}), fd->name), nr_str_from_int(((int64_t)(tags))));
         }
     }
 }

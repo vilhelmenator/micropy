@@ -26,17 +26,17 @@ def main() -> void:
 
 ```sh
 make                                                      # build the native compiler (~2 sec)
-python3 cli/mpy.py program.mpy                            # compile + link
-python3 cli/mpy.py program.mpy --run                      # compile, link, run
-python3 cli/mpy.py program.mpy --emit-c                   # emit C only
-python3 cli/mpy.py program.mpy --shared                   # compile to shared library (.so/.dylib/.dll)
-python3 cli/mpy.py build.mpy                              # run a project build script
-python3 cli/mpy.py program.mpy --watch                    # rebuild on save
-python3 cli/mpy.py program.mpy --flags="-O2 -march=native"   # extra compiler/linker flags
-python3 cli/mpy.py program.mpy --flags="-lssl -lz"           # link extra libraries
-python3 cli/mpy.py program.mpy --safe                            # enable runtime safety checks
-python3 cli/mpy.py program.mpy --c-module "gl=<GL/gl.h>"        # import C library by name
-python3 cli/mpy.py program.mpy --no-line-directives           # omit #line directives from C output
+python3 cli/nathra.py program.nth                            # compile + link
+python3 cli/nathra.py program.nth --run                      # compile, link, run
+python3 cli/nathra.py program.nth --emit-c                   # emit C only
+python3 cli/nathra.py program.nth --shared                   # compile to shared library (.so/.dylib/.dll)
+python3 cli/nathra.py build.nth                              # run a project build script
+python3 cli/nathra.py program.nth --watch                    # rebuild on save
+python3 cli/nathra.py program.nth --flags="-O2 -march=native"   # extra compiler/linker flags
+python3 cli/nathra.py program.nth --flags="-lssl -lz"           # link extra libraries
+python3 cli/nathra.py program.nth --safe                            # enable runtime safety checks
+python3 cli/nathra.py program.nth --c-module "gl=<GL/gl.h>"        # import C library by name
+python3 cli/nathra.py program.nth --no-line-directives           # omit #line directives from C output
 python3 cli/snekc.py                                          # interactive REPL
 ```
 
@@ -50,14 +50,14 @@ python3 cli/snekc.py                                          # interactive REPL
 | `float`       | `double`           |                                    |
 | `bool`        | `int`              |                                    |
 | `byte`        | `uint8_t`          |                                    |
-| `str`         | `MpStr*`           | heap-allocated, ref-counted string |
+| `str`         | `NrStr*`           | heap-allocated, ref-counted string |
 | `cstr`        | `char*`            | raw C string pointer               |
 | `void`        | `void`             |                                    |
 | `ptr[T]`      | `T*`               |                                    |
 | `const[T]`    | `const T`          |                                    |
 | `volatile[T]` | `volatile T`       |                                    |
 | `atomic[T]`   | `volatile T`       | use with `atomic_load/store/add/sub/cas` |
-| `thread_local[T]` | `MP_TLS T`     | per-thread storage (global or static local) |
+| `thread_local[T]` | `NR_TLS T`     | per-thread storage (global or static local) |
 | `static[T]`   | `static T`         | static local — persists across calls        |
 | `array[T, N]` | `T[N]`             | fixed-size stack array             |
 | `vec[T, N]`   | GCC vector type    | SIMD vector                        |
@@ -382,7 +382,7 @@ Methods: `keys()`, `values()`, `get(k, default)`. The runtime uses string keys a
 
 ### Strings
 
-String literals are automatically inferred as `MpStr*` — no `str_new()` needed:
+String literals are automatically inferred as `NrStr*` — no `str_new()` needed:
 
 ```python
 s: str = "hello"
@@ -596,7 +596,7 @@ def scale_array(data: ptr[float], n: int) -> void:
         data[i] = data[i] * 2.0
 ```
 
-The loop is split evenly across `threads` worker threads using `mp_parallel_for`. The function signature must take a pointer and a count; the loop variable must be the index.
+The loop is split evenly across `threads` worker threads using `nr_parallel_for`. The function signature must take a pointer and a count; the loop variable must be the index.
 
 ### Platform-specific functions
 
@@ -633,11 +633,11 @@ struct Circle:
 ### Modules
 
 ```python
-# math_utils.mpy
+# math_utils.nth
 def lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 
-# main.mpy
+# main.nth
 import math_utils
 from math_utils import lerp
 
@@ -663,7 +663,7 @@ eof:     int = r.eof()
 r.close()
 ```
 
-When a `str` variable is passed to `f.write()`, it calls `mp_file_write_str` automatically. String literals and `cstr` go through the raw C write path.
+When a `str` variable is passed to `f.write()`, it calls `nr_file_write_str` automatically. String literals and `cstr` go through the raw C write path.
 
 ```python
 import os
@@ -681,7 +681,7 @@ os.mkdir("/tmp/mydir")
 os.rmdir("/tmp/mydir")
 ok:  int = os.isdir("/tmp/mydir")
 cwd: str = os.getcwd()
-entries: list = os.listdir(".")   # list of MpStr* names
+entries: list = os.listdir(".")   # list of NrStr* names
 ```
 
 ```python
@@ -714,7 +714,7 @@ struct Entity:
 **Inline serialization** — for writing to buffers, network, or custom formats:
 
 ```python
-w: ptr[MpWriter] = writer_new(256)
+w: ptr[NrWriter] = writer_new(256)
 v: Vec3 = Vec3(1.0, 2.0, 3.0)
 serialize_Vec3(w, addr_of(v))
 
@@ -730,7 +730,7 @@ save_Entity("scene.bin", root)
 root: ptr[Entity] = load_Entity("scene.bin")
 ```
 
-The compiler walks the object graph depth-first, deduplicates shared pointers, serializes leaves first, and writes pointer fields as indices. On load, all objects are allocated and pointer references are reconstructed. The `.mpy` source is the schema.
+The compiler walks the object graph depth-first, deduplicates shared pointers, serializes leaves first, and writes pointer fields as indices. On load, all objects are allocated and pointer references are reconstructed. The `.nth` source is the schema.
 
 **Cycle handling** — use `backref[T]` on fields that point back up the tree (e.g. parent pointers). These are skipped during graph collection to prevent infinite loops:
 
@@ -746,10 +746,10 @@ struct Node:
 
 **Supported field types:** scalars (`int`, `float`, `bool`, fixed-width integers), `str`, nested `@serializable` structs (by value), `ptr[T]` to `@serializable` structs, `array[T, N]` with scalar or struct elements.
 
-`MpWriter`/`MpReader` are general-purpose binary I/O primitives — usable directly for network protocols, binary file formats, or custom serialization:
+`NrWriter`/`NrReader` are general-purpose binary I/O primitives — usable directly for network protocols, binary file formats, or custom serialization:
 
 ```python
-w: ptr[MpWriter] = writer_new(64)
+w: ptr[NrWriter] = writer_new(64)
 write_i32(w, 42)
 write_f64(w, 3.14)
 write_str(w, my_string)
@@ -782,16 +782,16 @@ def main() -> int:
 
 No `@extern` declarations, no constant blocks — `import glut` gives you every function and `#define` from the headers.
 
-Map module names to headers via the CLI or `build.mpy`:
+Map module names to headers via the CLI or `build.nth`:
 
 ```sh
-python3 cli/mpy.py program.mpy --c-module "glut=<GLUT/glut.h>,<OpenGL/gl.h>"
+python3 cli/nathra.py program.nth --c-module "glut=<GLUT/glut.h>,<OpenGL/gl.h>"
 ```
 
 ```python
-# build.mpy
+# build.nth
 exe("cube",
-    sources=["cube.mpy"],
+    sources=["cube.nth"],
     c_modules={
         "glut": {
             "macos": ["<GLUT/glut.h>", "<OpenGL/gl.h>"],
@@ -897,7 +897,7 @@ pool_shutdown(pool)                    # waits for all tasks, then frees
 Mark functions with `@export` and compile to a shared library. The host loads it with `hotreload_open`, calls `get_api()` to get a vtable of function pointers, and can swap the library at runtime without restarting.
 
 ```python
-# game_logic.mpy  →  compiled with --shared
+# game_logic.nth  →  compiled with --shared
 state: int = 0
 
 @export
@@ -914,10 +914,10 @@ def get_state() -> int:
 ```
 
 ```sh
-python3 cli/mpy.py game_logic.mpy --shared   # → game_logic.so / .dylib / .dll
+python3 cli/nathra.py game_logic.nth --shared   # → game_logic.so / .dylib / .dll
 ```
 
-The compiler auto-generates a `MpApi` vtable struct and a `get_api()` entry point:
+The compiler auto-generates a `NrApi` vtable struct and a `get_api()` entry point:
 
 ```c
 // generated in game_logic.c
@@ -925,15 +925,15 @@ typedef struct {
     void    (*init)(int64_t);
     void    (*update)(double);
     int64_t (*get_state)(void);
-} MpApi;
+} NrApi;
 
-MpApi* get_api(void);
+NrApi* get_api(void);
 ```
 
 Host (can also be nathra):
 
 ```python
-# host.mpy
+# host.nth
 c_include("<dlfcn.h>")
 
 def main() -> void:
@@ -982,19 +982,19 @@ Variables become C globals that persist between evaluations. State is transferre
 
 ### Build system
 
-`build.mpy` is a build script interpreted by nathra's build runner:
+`build.nth` is a build script interpreted by nathra's build runner:
 
 ```python
-exe("hello",   sources=["hello.mpy"],         run=False)
-exe("tests",   sources=["tests/test_foo.mpy"], run=True)
-exe("release", sources=["main.mpy"],           flags=["-O2", "-march=native"])
-lib("mylib",   sources=["mylib.mpy"],          kind="static")
-lib("plugin",  sources=["plugin.mpy"],         kind="shared")
+exe("hello",   sources=["hello.nth"],         run=False)
+exe("tests",   sources=["tests/test_foo.nth"], run=True)
+exe("release", sources=["main.nth"],           flags=["-O2", "-march=native"])
+lib("mylib",   sources=["mylib.nth"],          kind="static")
+lib("plugin",  sources=["plugin.nth"],         kind="shared")
 ```
 
-Run with `python3 cli/mpy.py build.mpy`.
+Run with `python3 cli/nathra.py build.nth`.
 
-**Incremental builds** — the compiler embeds the source mtime as `/* mpy_stamp: ... */` in every generated `.c` file, including the max mtime of all transitively imported modules. The build runner reads this stamp and skips recompilation when the source is unchanged, without relying on filesystem timestamps.
+**Incremental builds** — the compiler embeds the source mtime as `/* nth_stamp: ... */` in every generated `.c` file, including the max mtime of all transitively imported modules. The build runner reads this stamp and skips recompilation when the source is unchanged, without relying on filesystem timestamps.
 
 ### Testing
 
@@ -1035,10 +1035,10 @@ In release builds, heap tracking compiles out — zero overhead.
 
 ### Error messages
 
-Compiler errors point directly to the `.mpy` source line via `#line` directives:
+Compiler errors point directly to the `.nth` source line via `#line` directives:
 
 ```
-tests/my_prog.mpy:12:5: error: use of undeclared identifier 'typo'
+tests/my_prog.nth:12:5: error: use of undeclared identifier 'typo'
 ```
 
 ## Compiler optimizations
@@ -1087,7 +1087,7 @@ Large local variables are wrapped in a `{ }` block scope sized to their actual f
 
 ### Hot/cold splitting
 
-When an `if` arm contains only error handling (a `raise`, a call to a `@cold` function, or another cold `if`) the arm is extracted into a separate `static __attribute__((cold))` helper and the branch is wrapped in `MP_UNLIKELY(...)`. This keeps the hot path's instruction footprint tight for I-cache utilisation.
+When an `if` arm contains only error handling (a `raise`, a call to a `@cold` function, or another cold `if`) the arm is extracted into a separate `static __attribute__((cold))` helper and the branch is wrapped in `NR_UNLIKELY(...)`. This keeps the hot path's instruction footprint tight for I-cache utilisation.
 
 ```python
 def safe_divide(a: int, b: int) -> int:
@@ -1113,11 +1113,11 @@ def process(arr: ptr[int], n: int) -> int:
 
 ## Safety checks
 
-`--safe` enables runtime safety checks. All checks are gated behind `#ifdef MP_SAFE` so there is zero overhead when compiling without the flag.
+`--safe` enables runtime safety checks. All checks are gated behind `#ifdef NR_SAFE` so there is zero overhead when compiling without the flag.
 
 ```sh
-python3 cli/mpy.py program.mpy --safe          # compile with safety checks
-python3 cli/mpy.py program.mpy --safe --run     # compile and run
+python3 cli/nathra.py program.nth --safe          # compile with safety checks
+python3 cli/nathra.py program.nth --safe --run     # compile and run
 ```
 
 ### Division by zero
@@ -1125,7 +1125,7 @@ python3 cli/mpy.py program.mpy --safe --run     # compile and run
 Integer `/` and `%` are wrapped with a check that aborts with file and line info instead of triggering undefined behavior:
 
 ```python
-x: int = a / b   # aborts with "division by zero at file.mpy:3" if b == 0
+x: int = a / b   # aborts with "division by zero at file.nth:3" if b == 0
 ```
 
 ### Integer overflow
@@ -1134,7 +1134,7 @@ x: int = a / b   # aborts with "division by zero at file.mpy:3" if b == 0
 
 ```python
 big: int = 9223372036854775807
-result: int = big + 1   # aborts with "integer overflow at file.mpy:2"
+result: int = big + 1   # aborts with "integer overflow at file.nth:2"
 ```
 
 ### Out-of-bounds access
@@ -1143,7 +1143,7 @@ Array subscripts are bounds-checked at runtime:
 
 ```python
 arr: array[int, 4] = {1, 2, 3, 4}
-x: int = arr[10]   # aborts with "index 10 out of bounds [0, 4) at file.mpy:2"
+x: int = arr[10]   # aborts with "index 10 out of bounds [0, 4) at file.nth:2"
 ```
 
 ### Null pointer dereference
@@ -1165,7 +1165,7 @@ if p is not None:
 
 ### Python vs nathra
 
-`bench/bench.mpy` is a dual-mode file that runs as plain Python and compiles with nathra. `bench/run.py` builds the binary with `-O2`, runs both, and prints a comparison:
+`bench/bench.nth` is a dual-mode file that runs as plain Python and compiles with nathra. `bench/run.py` builds the binary with `-O2`, runs both, and prints a comparison:
 
 ```
 benchmark             python ms    nathra ms   speedup
@@ -1201,7 +1201,7 @@ linked_list                    —         943         962      1.0x  prefetch(n
 - **soa_sum** — the `@soa` benchmark extracts one field from a particle array (8 fields, 64 B/particle). AoS loads a full 64-byte cache line to get 8 B of `.x`; SoA reads only the `particles_x[]` stream (8 B/element). 4.1× speedup at 5 M particles, `@noinline` on both sides to prevent the optimizer from collapsing the rep loop.
 - **saxpy / strided_sum / restrict_short** — Apple Clang at `-O2 -march=native` on Apple Silicon already applies vectorization strategies that match nathra's `restrict` and constant-specialisation output on this target; speedup is architecture-dependent and more visible on x86 toolchains where the overlap-check preamble is costlier.
 - **hot_cold** — nathra outlines all three `raise` branches into `static __attribute__((cold, noreturn))` helpers, keeping the hot loop in fewer I-cache lines. The benefit is measurable under I-cache pressure from a larger surrounding binary; Apple Silicon's large L1-I cache absorbs the inline cold paths on this isolated benchmark.
-- **linked_list** — nathra inserts `MP_PREFETCH(head->next->next, 0, 1)` before each pointer-chase load. The list is built with a stride-permuted layout (~12 MB hops) to defeat hardware prefetchers. Apple Silicon's stream-detection hardware is unusually aggressive and partially covers irregular pointer-chase patterns; the prefetch benefit is larger on Intel/AMD where L3-miss latency is higher relative to core speed.
+- **linked_list** — nathra inserts `NR_PREFETCH(head->next->next, 0, 1)` before each pointer-chase load. The list is built with a stride-permuted layout (~12 MB hops) to defeat hardware prefetchers. Apple Silicon's stream-detection hardware is unusually aggressive and partially covers irregular pointer-chase patterns; the prefetch benefit is larger on Intel/AMD where L3-miss latency is higher relative to core speed.
 
 ```sh
 cd bench
@@ -1214,14 +1214,14 @@ The native compiler is written in nathra and compiles itself. Self-compilation b
 
 | Module | Python | Native | Speedup |
 |--------|--------|--------|---------|
-| native_analysis.mpy | 139 ms | 0.22 ms | 624x |
-| native_compile_file.mpy | 637 ms | 1.25 ms | 511x |
-| native_infer.mpy | 147 ms | 0.27 ms | 540x |
-| native_type_map.mpy | 144 ms | 0.33 ms | 436x |
-| native_codegen_stmt.mpy | 383 ms | 1.04 ms | 367x |
-| native_codegen_call.mpy | 311 ms | 0.94 ms | 331x |
-| native_codegen_expr.mpy | 225 ms | 0.78 ms | 287x |
-| native_compiler_state.mpy | 43 ms | 0.17 ms | 248x |
+| native_analysis.nth | 139 ms | 0.22 ms | 624x |
+| native_compile_file.nth | 637 ms | 1.25 ms | 511x |
+| native_infer.nth | 147 ms | 0.27 ms | 540x |
+| native_type_map.nth | 144 ms | 0.33 ms | 436x |
+| native_codegen_stmt.nth | 383 ms | 1.04 ms | 367x |
+| native_codegen_call.nth | 311 ms | 0.94 ms | 331x |
+| native_codegen_expr.nth | 225 ms | 0.78 ms | 287x |
+| native_compiler_state.nth | 43 ms | 0.17 ms | 248x |
 | **Total** | **2,029 ms** | **5.01 ms** | **405x** |
 
 The native compiler compiles ~4,000 lines of its own source in 5 milliseconds. Total compile time becomes dominated by `gcc`, which is the correct steady state — the compiler should never be slower than the C compiler it feeds.
@@ -1232,7 +1232,7 @@ See [BOOTSTRAP.md](BOOTSTRAP.md) for the full bootstrap roadmap and architecture
 
 ## Generated header rules
 
-Generated `.h` files include only `micropy_types.h` — a minimal header containing forward declarations, `stdint.h`, and `stddef.h`. They never include `micropy_rt.h`, `stdio.h`, `pthread.h`, or any other heavy header.
+Generated `.h` files include only `nathra_types.h` — a minimal header containing forward declarations, `stdint.h`, and `stddef.h`. They never include `nathra_rt.h`, `stdio.h`, `pthread.h`, or any other heavy header.
 
 The full runtime is included exactly once, in the generated `.c` file. Each `.c` includes its own `.h`, which transitively brings in any project module dependencies.
 
@@ -1250,20 +1250,20 @@ nathra/
     type_map.py                       Type annotation → C type mapping
     ast_serial.py                     Binary AST serializer
   cli/                              User-facing tools
-    mpy.py                            CLI entry point
+    nathra.py                         CLI entry point
     snekc.py                          Interactive REPL shell
-    micropy.py                        IDE stubs (from nathra import *)
+    nathra_stubs.py                   IDE stubs (from nathra import *)
   runtime/                          C headers shipped with the project
-    micropy_rt.h                      Full runtime: strings, lists, dicts, I/O, concurrency
-    micropy_types.h                   Forward declarations — safe to include from any header
-    micropy_test.h                    Test runner infrastructure
+    nathra_rt.h                      Full runtime: strings, lists, dicts, I/O, concurrency
+    nathra_types.h                   Forward declarations — safe to include from any header
+    nathra_test.h                    Test runner infrastructure
   native/                           Bootstrap native compiler (405x faster)
-    src/                              .mpy source for the native compiler
+    src/                              .nth source for the native compiler
     generated/                        Pre-generated .c/.h — just run make
   lib/
     build.py                          Build script interpreter
   scripts/
-    regenerate.py                     Regenerate native/generated/ from .mpy sources
+    regenerate.py                     Regenerate native/generated/ from .nth sources
     bootstrap_test.py                 Bootstrap verification
   build/                            Build artifacts (gitignored)
     compiler_native.dylib             Native compiler shared library
@@ -1276,7 +1276,7 @@ nathra/
 
 ```sh
 make                    # build native compiler from pre-generated C (~2 sec)
-make regenerate         # regenerate C from .mpy sources (needs Python compiler)
+make regenerate         # regenerate C from .nth sources (needs Python compiler)
 make test               # run the test suite
 make bootstrap          # run bootstrap verification
 make clean              # remove build artifacts

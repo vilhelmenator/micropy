@@ -106,17 +106,17 @@ Items marked ✅ are already implemented.
 
 ### One-pass AST walks — no infrastructure needed
 
-- ✅ **`MP_LIKELY`/`MP_UNLIKELY` on `is_ok`/`is_err`**
+- ✅ **`NR_LIKELY`/`NR_UNLIKELY` on `is_ok`/`is_err`**
   Branch prediction hint on the result-type happy path.
 
-- ✅ **`MP_UNLIKELY` on guard-raise patterns**
-  `if cond: raise "msg"` → `if (MP_UNLIKELY(cond))`. Error branches are cold.
+- ✅ **`NR_UNLIKELY` on guard-raise patterns**
+  `if cond: raise "msg"` → `if (NR_UNLIKELY(cond))`. Error branches are cold.
 
-- ✅ **`MP_PREFETCH` in `@unroll` loops**
+- ✅ **`NR_PREFETCH` in `@unroll` loops**
   Prefetch array elements ahead by `max(factor×4, 16)` at the start of each unrolled
   iteration.
 
-- ✅ **`MP_PREFETCH` in regular `for`-`range` loops**
+- ✅ **`NR_PREFETCH` in regular `for`-`range` loops**
   Same prefetch logic, fixed 8-element lookahead, capped at 2 array streams per loop.
 
 - ✅ **`@hot` struct cache-line alignment**
@@ -134,14 +134,14 @@ Items marked ✅ are already implemented.
   of the guard-raise logic.
 
 - [x] **String literal stack optimization**
-  `s: str = "literal"` emits a block-scope `MpStr` struct on the stack — no `malloc`,
+  `s: str = "literal"` emits a block-scope `NrStr` struct on the stack — no `malloc`,
   no `str_free` needed. String literals passed directly to `str_*` functions also
   auto-coerce to stack compound literals. `str_new` still works for runtime `cstr`
   values. Removes `str_new("literal")` boilerplate from idiomatic code.
 
 - [x] **`@compile_time` array prewarm**
   When a `@compile_time`-generated array is referenced in a function body, emit
-  `MP_PREFETCH` for its first cache line at function entry. The array is a known
+  `NR_PREFETCH` for its first cache line at function entry. The array is a known
   static address — zero guesswork.
 
 ### Requires escape analysis (build correctness primitive first)
@@ -185,7 +185,7 @@ Items marked ✅ are already implemented.
 
 - [x] **Linked-list / tree traversal prefetch**
   Detect `while node is not None: ... node = node.next` patterns. Emit
-  `MP_PREFETCH(node->next->next, 0, 1)` at the top of each iteration. Pointer-chase
+  `NR_PREFETCH(node->next->next, 0, 1)` at the top of each iteration. Pointer-chase
   latency is the dominant cost in tree traversals.
 
 - [x] **Function ordering (topological sort)**
@@ -304,28 +304,28 @@ Items marked ✅ are already implemented.
 The compiler has full knowledge of every struct's field types, nesting, and pointer
 relationships at compile time. Use this to generate bespoke serialize/deserialize
 functions per struct — no runtime reflection, no external schema files, no separate
-`.fbs` or `.proto` to maintain. The `.mpy` source is the schema.
+`.fbs` or `.proto` to maintain. The `.nth` source is the schema.
 
-### Phase 1 — Byte buffer primitives (`micropy_rt.h`)
+### Phase 1 — Byte buffer primitives (`nathra_rt.h`)
 
-- [x] **`MpWriter` / `MpReader` — general-purpose binary I/O**
-  Add two small structs to the runtime. `MpWriter` owns a growable `ptr[byte]`
-  buffer with a write cursor. `MpReader` holds a `ptr[byte]` and a read cursor.
+- [x] **`NrWriter` / `NrReader` — general-purpose binary I/O**
+  Add two small structs to the runtime. `NrWriter` owns a growable `ptr[byte]`
+  buffer with a write cursor. `NrReader` holds a `ptr[byte]` and a read cursor.
 
   Design these as general-purpose binary buffer primitives — not serialization-
   specific. They should be equally useful for network protocols, binary file
   formats, logging, and message packing. Keep the API minimal and composable.
 
   Primitives to implement:
-  - `mp_writer_new(initial_capacity)` / `mp_writer_free(w)`
-  - `mp_writer_pos(w)` — return current write offset
-  - `mp_write_bytes(w, ptr, len)` — raw memcpy into buffer, grow if needed
-  - `mp_write_i8/i16/i32/i64/u8/u16/u32/u64/f32/f64(w, value)`
-  - `mp_write_str(w, s)` — write length as `i32` then bytes
-  - `mp_write_bool(w, b)` — single byte, doubles as null/present flag
-  - `mp_writer_to_bytes(w, out_len)` — return the final buffer
-  - `mp_reader_new(buf, len)` / matching `mp_read_*` functions
-  - `mp_reader_pos(r)` — return current read offset
+  - `nr_writer_new(initial_capacity)` / `nr_writer_free(w)`
+  - `nr_writer_pos(w)` — return current write offset
+  - `nr_write_bytes(w, ptr, len)` — raw memcpy into buffer, grow if needed
+  - `nr_write_i8/i16/i32/i64/u8/u16/u32/u64/f32/f64(w, value)`
+  - `nr_write_str(w, s)` — write length as `i32` then bytes
+  - `nr_write_bool(w, b)` — single byte, doubles as null/present flag
+  - `nr_writer_to_bytes(w, out_len)` — return the final buffer
+  - `nr_reader_new(buf, len)` / matching `nr_read_*` functions
+  - `nr_reader_pos(r)` — return current read offset
 
   ~100–150 lines of C. No dependencies beyond stdlib. No serialization-specific
   concepts like identity maps or version headers — those belong in the generated
@@ -340,9 +340,9 @@ functions per struct — no runtime reflection, no external schema files, no sep
   - First pass: record `@serializable` structs in a set. For each, check if all
     fields are flat (scalar or another flat `@serializable` struct). If so, mark
     as `flat_serializable`.
-  - Codegen: emit `serialize_StructName(MpWriter* w, StructName* v)` and
-    `deserialize_StructName(MpReader* r, StructName* v)`. For flat structs the
-    body is a single `mp_write_bytes(w, v, sizeof(StructName))` and matching read.
+  - Codegen: emit `serialize_StructName(NrWriter* w, StructName* v)` and
+    `deserialize_StructName(NrReader* r, StructName* v)`. For flat structs the
+    body is a single `nr_write_bytes(w, v, sizeof(StructName))` and matching read.
 
 - [x] **Version / hash header**
   Emit a 4-byte struct hash as the first thing written by every `serialize_*`
@@ -363,9 +363,9 @@ functions per struct — no runtime reflection, no external schema files, no sep
 
   | Field type | Serialization |
   |------------|---------------|
-  | Scalar (`i32`, `f64`, …) | `mp_write_<type>(w, v->field)` |
+  | Scalar (`i32`, `f64`, …) | `nr_write_<type>(w, v->field)` |
   | Nested value struct | `serialize_Inner(w, &v->field)` — inline recursive call |
-  | `str` | `mp_write_str(w, v->field)` — length-prefixed bytes |
+  | `str` | `nr_write_str(w, v->field)` — length-prefixed bytes |
   | `ptr[T]` (`T` is `@serializable`) | Write 1-byte present flag (0=null, 1=present), then `serialize_T(w, v->field)` if present |
   | `array[T, N]` | Write N elements in order, each serialized by type |
   | `list[T]` | Write `i32` length, then each element |
@@ -397,7 +397,7 @@ functions per struct — no runtime reflection, no external schema files, no sep
      concrete instances within that known structure.
 
   3. **Write phase** — iterate the sorted list. Serialize each object into the
-     `MpWriter`, record its buffer offset in a pointer→offset map (a small flat
+     `NrWriter`, record its buffer offset in a pointer→offset map (a small flat
      array, indexed by the object's position in the sorted list). When a parent
      writes a `ptr[T]` field, look up the child's offset and write it as an `i32`.
 
@@ -417,7 +417,7 @@ functions per struct — no runtime reflection, no external schema files, no sep
   fields (no `list[ptr[T]]`), the compiler knows the maximum object count at
   compile time — the seen-set and offset maps can be stack-allocated flat arrays.
   When `list[ptr[T]]` fields are present (unbounded fan-out), the collect phase
-  uses a growable buffer instead — either a realloc'd array or an `MpWriter`
+  uses a growable buffer instead — either a realloc'd array or an `NrWriter`
   repurposed as a scratch allocator. The compiler emits the right strategy per
   struct based on whether any `list[ptr[T]]` appears in the type graph.
 
@@ -450,16 +450,16 @@ functions per struct — no runtime reflection, no external schema files, no sep
   written as null. The deserializer reconstructs backrefs from the tree structure
   after all forward references are resolved.
 
-  **File I/O wrappers:** `save_*` opens the file, creates an `MpWriter`,
+  **File I/O wrappers:** `save_*` opens the file, creates an `NrWriter`,
   runs the graph serialization, writes the buffer, closes. `load_*` reads the
-  file into a buffer, creates an `MpReader`, deserializes, returns a
+  file into a buffer, creates an `NrReader`, deserializes, returns a
   `Result[ptr[T]]` so version mismatches and I/O errors propagate cleanly.
 
 ### Testing
 
 | Phase | Test |
 |-------|------|
-| 1 | `MpWriter`/`MpReader` round-trip: write mixed types, read back, verify values |
+| 1 | `NrWriter`/`NrReader` round-trip: write mixed types, read back, verify values |
 | 2 | Round-trip a flat struct (write → read → compare all fields) |
 | 2 | Version mismatch: change a field, verify load rejects old data with clear error |
 | 3 | Round-trip struct with strings and nested pointers, verify content and structure |
@@ -486,11 +486,11 @@ receive the generated C and return the final output.
 
 ### How it works
 
-1. User creates a `codegen_hooks.py` (or any `.py` file) next to their `.mpy`
+1. User creates a `codegen_hooks.py` (or any `.py` file) next to their `.nth`
    source. This file contains plain Python functions that return decorator
    callbacks.
 
-2. The `.mpy` file imports and uses the decorator:
+2. The `.nth` file imports and uses the decorator:
 
    ```python
    from codegen_hooks import sierra_study
@@ -608,11 +608,11 @@ uses existing decorator and import mechanisms.
   as a native `.dylib` called from Python via ctypes. Binary AST serialization
   hands off the tree; native code returns generated C. Python retains only
   `ast.parse` and the system C compiler invocation.
-- **Performance.** Native compile of a 1,000-line `.mpy` module: 0.91 ms
+- **Performance.** Native compile of a 1,000-line `.nth` module: 0.91 ms
   (vs 102.5 ms in Python). 112× speedup. The compiler is now invisible in
   the pipeline — gcc dominates total build time.
 - **Codegen hooks.** Compile-time decorator hooks allow domain-specific
-  wrappers (e.g. Sierra Chart ACSIL studies) without polluting `.mpy` source.
+  wrappers (e.g. Sierra Chart ACSIL studies) without polluting `.nth` source.
 
 Bootstrap test parity with the Python compiler is the immediate priority —
 a handful of tests still diverge.
@@ -646,12 +646,12 @@ parts: list[str] = "a,b,c".split(",")
 Work items:
 
 - **String literal inference.** A bare `"hello"` in a context expecting `str`
-  emits `mp_str_new("hello")` automatically. In a context expecting `cstr`,
+  emits `nr_str_new("hello")` automatically. In a context expecting `cstr`,
   it stays as a C string literal. The compiler already knows the expected type
   from annotations — this is a codegen rewrite, not a type system change.
 - **Method call syntax on literals.** `"hello".upper()` needs the compiler to
   recognize method calls on string-typed expressions and route them to the
-  `mp_str_*` functions. The method dispatch already works for `str` variables;
+  `nr_str_*` functions. The method dispatch already works for `str` variables;
   extending it to literals means treating a string literal as an implicit
   `str_new` in method-call position.
 - **f-string support.** The Python AST already parses f-strings into
@@ -771,11 +771,11 @@ Work items:
 ## Safety checks (`--safe`)
 
 ```
- 1. Division by zero          ✅  (mp_safe_div_i64 / mp_safe_mod_i64)
+ 1. Division by zero          ✅  (nr_safe_div_i64 / nr_safe_mod_i64)
  2. Null analysis (static)    ✅  (three-value lattice, compile errors for provably-null — always on)
- 3. Null checks (runtime)     ✅  (mp_safe_null_check for `unknown` state under --safe)
- 4. Out of bounds             ✅  (mp_safe_bounds_check for array + list)
- 5. Integer overflow           ✅  (__builtin_*_overflow via mp_safe_add/sub/mul_i64)
+ 3. Null checks (runtime)     ✅  (nr_safe_null_check for `unknown` state under --safe)
+ 4. Out of bounds             ✅  (nr_safe_bounds_check for array + list)
+ 5. Integer overflow           ✅  (__builtin_*_overflow via nr_safe_add/sub/mul_i64)
 ```
 
 Division by zero first to prove the `--safe` flag plumbing end-to-end,
@@ -796,7 +796,7 @@ flag is absent, zero overhead — no checks emitted. This follows the existing
 three-tier build model: `debug` (safe + assertions), `release` (no checks),
 `unsafe` (no checks, no bounds, raw pointers).
 
-The flag controls a compile-time `#define MP_SAFE` that guards every check.
+The flag controls a compile-time `#define NR_SAFE` that guards every check.
 Each check compiles to a single branch that calls a `__attribute__((cold,
 noreturn))` handler — the hot path stays branchless and inlineable.
 
@@ -809,7 +809,7 @@ Every integer division and modulo (`/`, `//`, `%`) is wrapped:
 x: int = a / b
 
 # emitted (--safe)
-x = mp_safe_div_i64(a, b, __FILE__, __LINE__);
+x = nr_safe_div_i64(a, b, __FILE__, __LINE__);
 
 # emitted (release)
 x = a / b;
@@ -855,7 +855,7 @@ deref(p)                        # ERROR: dereference of provably null pointer
 ```
 
 ```
-sma_study.mpy:12: error: dereference of provably null pointer 'p'
+sma_study.nth:12: error: dereference of provably null pointer 'p'
     note: assigned None at line 11
 ```
 
@@ -868,7 +868,7 @@ def process(p: ptr[Node]) -> void:   # parameter: could be anything
     v: int = p.value                 # unknown → runtime check
 
 # emitted (--safe)
-mp_safe_deref_check(p, __FILE__, __LINE__);
+nr_safe_deref_check(p, __FILE__, __LINE__);
 v = p->value;
 ```
 
@@ -915,14 +915,14 @@ Array and list subscript access (`arr[i]`, `lst[i]`) is bounds-checked:
 v: int = arr[i]
 
 # emitted (--safe)
-mp_safe_bounds_check(i, 64, __FILE__, __LINE__);
+nr_safe_bounds_check(i, 64, __FILE__, __LINE__);
 v = arr[i];
 
 # source — list[int]
 v: int = nums[i]
 
 # emitted (--safe)
-mp_safe_bounds_check(i, nums->len, __FILE__, __LINE__);
+nr_safe_bounds_check(i, nums->len, __FILE__, __LINE__);
 v = ...;
 ```
 
@@ -944,7 +944,7 @@ is checked for overflow on `+`, `-`, `*`:
 c: int = a + b
 
 # emitted (--safe)
-c = mp_safe_add_i64(a, b, __FILE__, __LINE__);
+c = nr_safe_add_i64(a, b, __FILE__, __LINE__);
 ```
 
 Implementation uses GCC/Clang `__builtin_add_overflow` /
@@ -967,22 +967,22 @@ wrapper — it checks both `b == 0` and the `MIN / -1` edge case.
 
 ### Error messages
 
-All safety handlers print the `.mpy` source file and line (via `#line`
+All safety handlers print the `.nth` source file and line (via `#line`
 directives already emitted by the compiler), not the generated C location:
 
 ```
-sma_study.mpy:42: division by zero
-sma_study.mpy:17: null pointer dereference
-sma_study.mpy:31: index 64 out of bounds (size 64)
-sma_study.mpy:55: integer overflow in multiplication
+sma_study.nth:42: division by zero
+sma_study.nth:17: null pointer dereference
+sma_study.nth:31: index 64 out of bounds (size 64)
+sma_study.nth:55: integer overflow in multiplication
 ```
 
 ### CLI
 
 ```sh
-python3 cli/mpy.py program.mpy --safe              # enable all safety checks
-python3 cli/mpy.py program.mpy --safe --run        # safe + run
-python3 cli/mpy.py program.mpy                     # release: no checks (default)
+python3 cli/nathra.py program.nth --safe              # enable all safety checks
+python3 cli/nathra.py program.nth --safe --run        # safe + run
+python3 cli/nathra.py program.nth                     # release: no checks (default)
 ```
 
 The `--safe` flag can be combined with `--flags="-O2"` — the checks are
@@ -1041,10 +1041,10 @@ so this directly controls the final binary layout without needing a link-time
 order file.
 
 **Report.** `--call-graph` flag emits a report showing the suggested ordering
-and the heaviest edges, so you can reorganize your `.mpy` source to match:
+and the heaviest edges, so you can reorganize your `.nth` source to match:
 
 ```
-call graph: native_codegen_stmt.mpy
+call graph: native_codegen_stmt.nth
   compile_stmt ↔ compile_expr        weight: 450
   compile_stmt ↔ compile_assign      weight: 120
   compile_expr ↔ compile_call        weight: 380
@@ -1175,7 +1175,7 @@ with scope(arena, 65536):
 This is sugar for the existing pattern:
 
 ```python
-arena: MpArena = arena_new(65536)
+arena: NrArena = arena_new(65536)
 defer(arena_free(arena))
 ```
 
@@ -1277,8 +1277,8 @@ def process_batch(items: ptr[Item], count: i32) -> void:
 
 ### Implementation
 
-The runtime maintains a global `int64_t mp_heap_bytes` counter. Under
-`--safe` or `--track-alloc`, `mp_alloc(n)` adds `n`, `mp_free(p)` subtracts
+The runtime maintains a global `int64_t nr_heap_bytes` counter. Under
+`--safe` or `--track-alloc`, `nr_alloc(n)` adds `n`, `mp_free(p)` subtracts
 the allocation size (stored in a small header before the returned pointer,
 same pattern as `mimalloc` and `jemalloc`). In release builds the counter
 and header are compiled out — zero overhead.
@@ -1287,5 +1287,5 @@ and header are compiled out — zero overhead.
 a cold abort handler with file/line on mismatch:
 
 ```
-sma_study.mpy:47: heap assertion failed: expected 0 bytes allocated, found 128
+sma_study.nth:47: heap assertion failed: expected 0 bytes allocated, found 128
 ```

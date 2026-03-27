@@ -1,4 +1,4 @@
-"""Binary AST serializer for the micropy bootstrap compiler.
+"""Binary AST serializer for the nathra bootstrap compiler.
 
 Walks a Python ast.Module depth-first and writes a compact binary encoding
 that the native compiler can deserialize into C structs.

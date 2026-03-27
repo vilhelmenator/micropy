@@ -144,18 +144,18 @@ class BuildRunner:
 
     @staticmethod
     def _read_stamp(c_path: str) -> float:
-        """Read the mpy_stamp from the first line of a generated C file."""
+        """Read the nth_stamp from the first line of a generated C file."""
         try:
             with open(c_path) as f:
                 first = f.readline()
-            if first.startswith("/* mpy_stamp:"):
+            if first.startswith("/* nth_stamp:"):
                 return float(first[13:].strip().rstrip(" */"))
         except Exception:
             pass
         return 0.0
 
     def _compile_sources(self, target: BuildTarget):
-        """Compile all .mpy sources for a target. Returns (c_files, any_recompiled)."""
+        """Compile all .nth sources for a target. Returns (c_files, any_recompiled)."""
         c_files = []
         compiled_files: set = set()
         any_recompiled = False
@@ -306,11 +306,11 @@ class BuildRunner:
 # ---------------------------------------------------------------------------
 
 def run_build_file(build_path: str, cc: str = "gcc", platform: str = "all"):
-    """Execute a build.mpy file with the build DSL injected."""
+    """Execute a build.nth file with the build DSL injected."""
     build_dir = os.path.dirname(os.path.abspath(build_path))
 
-    rt_path = os.path.join(build_dir, "micropy_rt.h")
-    src_rt = os.path.join(_HERE, "runtime", "micropy_rt.h")
+    rt_path = os.path.join(build_dir, "nathra_rt.h")
+    src_rt = os.path.join(_HERE, "runtime", "nathra_rt.h")
     if not os.path.exists(rt_path) or os.path.getmtime(src_rt) > os.path.getmtime(rt_path):
         shutil.copy2(src_rt, rt_path)
 

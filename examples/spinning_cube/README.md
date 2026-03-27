@@ -7,20 +7,20 @@ A minimal 3D demo: a colored cube rotating in a window. No external dependencies
 ```sh
 # From the repo root:
 cd examples/spinning_cube
-PYTHONPATH=../.. python3 ../../cli/mpy.py build.mpy
+PYTHONPATH=../.. python3 ../../cli/nathra.py build.nth
 ```
 
 Or directly:
 
 ```sh
 # macOS:
-PYTHONPATH=. python3 cli/mpy.py examples/spinning_cube/cube.mpy \
+PYTHONPATH=. python3 cli/nathra.py examples/spinning_cube/cube.nth \
     --c-module "glut=<GLUT/glut.h>,<OpenGL/gl.h>" \
     --flags="-framework OpenGL -framework GLUT -framework Cocoa -Wno-deprecated-declarations" \
     --run
 
 # Linux:
-PYTHONPATH=. python3 cli/mpy.py examples/spinning_cube/cube.mpy \
+PYTHONPATH=. python3 cli/nathra.py examples/spinning_cube/cube.nth \
     --c-module "glut=<GL/glut.h>,<GL/gl.h>" \
     --flags="-lGL -lglut -lm" \
     --run
@@ -49,11 +49,11 @@ def main() -> int:
 
 `import glut` is mapped to C headers by the build system. The compiler runs `gcc -E` at compile time to extract all function signatures and `#define` constants from the headers — no manual declarations needed.
 
-The `build.mpy` handles platform differences:
+The `build.nth` handles platform differences:
 
 ```python
 exe("cube",
-    sources=["cube.mpy"],
+    sources=["cube.nth"],
     c_modules={
         "glut": {
             "macos": ["<GLUT/glut.h>", "<OpenGL/gl.h>"],

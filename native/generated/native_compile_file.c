@@ -1,11 +1,11 @@
-/* mpy_stamp: 1774633278.559909 */
-#include "micropy_rt.h"
+/* nth_stamp: 1774645808.931380 */
+#include "nathra_rt.h"
 #include "native_compile_file.h"
 
-void native_compile_file__emit(CompilerState* restrict s, const MpStr* restrict line);
-void native_compile_file__emit_raw(CompilerState* restrict s, const MpStr* restrict line);
+void native_compile_file__emit(CompilerState* restrict s, const NrStr* restrict line);
+void native_compile_file__emit_raw(CompilerState* restrict s, const NrStr* restrict line);
 void native_compile_file__first_pass(CompilerState* s, AstNodeList body);
-int64_t native_compile_file__has_decorator(const AstFunctionDef* restrict fd, const MpStr* restrict name);
+int64_t native_compile_file__has_decorator(const AstFunctionDef* restrict fd, const NrStr* restrict name);
 void native_compile_file__scan_annotation_for_list(CompilerState* restrict s, const AstNode* restrict ann);
 void native_compile_file__scan_typed_lists(CompilerState* s, AstNodeList body);
 void native_compile_file__emit_typed_lists(CompilerState* s);
@@ -19,12 +19,12 @@ void native_compile_file__emit_constants(CompilerState* s, AstNodeList body);
 void native_compile_file__emit_globals(CompilerState* s, AstNodeList body);
 void native_compile_file__emit_function_prototypes(CompilerState* s, AstNodeList body);
 int64_t native_compile_file__is_extern_func(const AstFunctionDef* fd);
-void native_compile_file__compile_one_func(CompilerState* restrict s, AstFunctionDef* restrict fd, const MpStr* restrict prefix);
-MpStr* native_compile_file__edge_key(const MpStr* restrict a, const MpStr* restrict b);
-void native_compile_file__walk_calls_weighted(AstNodeList stmts, MpStr* restrict caller, StrSet* restrict func_names, StrMap* restrict edges, int32_t depth, int64_t is_hot);
-void native_compile_file__scan_calls_in_node(const AstNode* restrict node, MpStr* restrict caller, StrSet* restrict func_names, StrMap* restrict edges, int32_t depth, int64_t is_hot);
+void native_compile_file__compile_one_func(CompilerState* restrict s, AstFunctionDef* restrict fd, const NrStr* restrict prefix);
+NrStr* native_compile_file__edge_key(const NrStr* restrict a, const NrStr* restrict b);
+void native_compile_file__walk_calls_weighted(AstNodeList stmts, NrStr* restrict caller, StrSet* restrict func_names, StrMap* restrict edges, int32_t depth, int64_t is_hot);
+void native_compile_file__scan_calls_in_node(const AstNode* restrict node, NrStr* restrict caller, StrSet* restrict func_names, StrMap* restrict edges, int32_t depth, int64_t is_hot);
 void native_compile_file__reorder_by_call_graph(const AstFunctionDef** restrict funcs, int32_t count, const StrMap* restrict edges, AstFunctionDef** restrict out);
-void native_compile_file__dce_find_calls(const AstNode* restrict node, StrSet* restrict all_names, StrSet* restrict reachable, MpStr** restrict work, int32_t* restrict work_count, MpStr* restrict caller);
+void native_compile_file__dce_find_calls(const AstNode* restrict node, StrSet* restrict all_names, StrSet* restrict reachable, NrStr** restrict work, int32_t* restrict work_count, NrStr* restrict caller);
 void native_compile_file__emit_functions(CompilerState* s, AstNodeList body);
 void native_compile_file__emit_runtime_impl(CompilerState* s);
 int32_t native_compile_file_native_compile(const uint8_t* restrict ast_buf, int64_t ast_len, uint8_t** restrict out_buf, int64_t* restrict out_len);
@@ -33,18 +33,18 @@ int32_t native_compile_file_native_compile_dep(CompilerState* restrict state, co
 int32_t native_compile_file_native_compile_main(CompilerState* restrict state, const uint8_t* restrict ast_buf, int64_t ast_len, uint8_t** restrict out_buf, int64_t* restrict out_len);
 int main(void);
 
-void native_compile_file__emit(CompilerState* restrict s, const MpStr* restrict line) {
+void native_compile_file__emit(CompilerState* restrict s, const NrStr* restrict line) {
     for (int64_t i = 0; i < s->indent; i++) {
-        mp_write_text(s->lines, mp_str_new("    "));
+        nr_write_text(s->lines, nr_str_new("    "));
     }
-    mp_write_text(s->lines, line);
-    mp_write_text(s->lines, mp_str_new("\n"));
+    nr_write_text(s->lines, line);
+    nr_write_text(s->lines, nr_str_new("\n"));
 }
 
-void native_compile_file__emit_raw(CompilerState* restrict s, const MpStr* restrict line) {
+void native_compile_file__emit_raw(CompilerState* restrict s, const NrStr* restrict line) {
     "Emit without indentation.";
-    mp_write_text(s->lines, line);
-    mp_write_text(s->lines, mp_str_new("\n"));
+    nr_write_text(s->lines, line);
+    nr_write_text(s->lines, nr_str_new("\n"));
 }
 
 void native_compile_file__first_pass(CompilerState* s, AstNodeList body) {
@@ -56,7 +56,7 @@ void native_compile_file__first_pass(CompilerState* s, AstNodeList body) {
         }
         if ((node->tag == TAG_FUNCTION_DEF)) {
             AstFunctionDef* fd = node->data;
-            MpStr* ret_type = native_type_map_native_map_type(fd->returns);
+            NrStr* ret_type = native_type_map_native_map_type(fd->returns);
             strmap_strmap_set((&s->func_ret_types), fd->name, ret_type);
             continue;
         }
@@ -95,31 +95,31 @@ void native_compile_file__first_pass(CompilerState* s, AstNodeList body) {
                         AstAnnAssign* aa = item2->data;
                         if (((aa->target != NULL) && (aa->target->tag == TAG_NAME))) {
                             AstName* fn = aa->target->data;
-                            MpStr* ft = native_type_map_native_map_type(aa->annotation);
-                            if (mp_str_eq(ft, (&(MpStr){.data=(char*)"__array__",.len=9}))) {
+                            NrStr* ft = native_type_map_native_map_type(aa->annotation);
+                            if (nr_str_eq(ft, (&(NrStr){.data=(char*)"__array__",.len=9}))) {
                                 if (((aa->annotation != NULL) && (aa->annotation->tag == TAG_SUBSCRIPT))) {
                                     AstSubscript* asub = aa->annotation->data;
                                     AstNode* sl = asub->slice;
                                     if (((sl != NULL) && (sl->tag == TAG_TUPLE))) {
                                         AstTuple* tup = sl->data;
                                         if ((tup->elts.count >= 2)) {
-                                            MpStr* et = native_type_map_native_map_type(tup->elts.items[0]);
-                                            MpStr* sz = native_codegen_expr_native_compile_expr(s, tup->elts.items[1]);
-                                            ft = mp_str_format("__arr_%s_%s", et->data, sz->data);
+                                            NrStr* et = native_type_map_native_map_type(tup->elts.items[0]);
+                                            NrStr* sz = native_codegen_expr_native_compile_expr(s, tup->elts.items[1]);
+                                            ft = nr_str_format("__arr_%s_%s", et->data, sz->data);
                                         }
                                     }
                                 }
                             }
-                            if (mp_str_eq(ft, (&(MpStr){.data=(char*)"__bitfield__",.len=12}))) {
+                            if (nr_str_eq(ft, (&(NrStr){.data=(char*)"__bitfield__",.len=12}))) {
                                 if (((aa->annotation != NULL) && (aa->annotation->tag == TAG_SUBSCRIPT))) {
                                     AstSubscript* bf_sub = aa->annotation->data;
                                     AstNode* bf_sl = bf_sub->slice;
                                     if (((bf_sl != NULL) && (bf_sl->tag == TAG_TUPLE))) {
                                         AstTuple* bf_tup = bf_sl->data;
                                         if ((bf_tup->elts.count >= 2)) {
-                                            MpStr* bf_t = native_type_map_native_map_type(bf_tup->elts.items[0]);
-                                            MpStr* bf_w = native_codegen_expr_native_compile_expr(s, bf_tup->elts.items[1]);
-                                            ft = mp_str_format("__bf_%s_%s", bf_t->data, bf_w->data);
+                                            NrStr* bf_t = native_type_map_native_map_type(bf_tup->elts.items[0]);
+                                            NrStr* bf_w = native_codegen_expr_native_compile_expr(s, bf_tup->elts.items[1]);
+                                            ft = nr_str_format("__bf_%s_%s", bf_t->data, bf_w->data);
                                         }
                                     }
                                 }
@@ -136,8 +136,8 @@ void native_compile_file__first_pass(CompilerState* s, AstNodeList body) {
                 AstNode* item3 = cd->body.items[j];
                 if (((item3 != NULL) && (item3->tag == TAG_FUNCTION_DEF))) {
                     AstFunctionDef* md = item3->data;
-                    MpStr* mret = native_type_map_native_map_type(md->returns);
-                    MpStr* mname = mp_str_concat(mp_str_concat(cd->name, (&(MpStr){.data=(char*)"_",.len=1})), md->name);
+                    NrStr* mret = native_type_map_native_map_type(md->returns);
+                    NrStr* mname = nr_str_concat(nr_str_concat(cd->name, (&(NrStr){.data=(char*)"_",.len=1})), md->name);
                     strmap_strmap_set((&s->func_ret_types), mname, mret);
                 }
             }
@@ -147,9 +147,9 @@ void native_compile_file__first_pass(CompilerState* s, AstNodeList body) {
             AstAnnAssign* aa2 = node->data;
             if (((aa2->target != NULL) && (aa2->target->tag == TAG_NAME))) {
                 AstName* vn = aa2->target->data;
-                MpStr* ct = native_type_map_native_map_type(aa2->annotation);
+                NrStr* ct = native_type_map_native_map_type(aa2->annotation);
                 int64_t is_upper = 1;
-                int64_t name_len = mp_str_len(vn->id);
+                int64_t name_len = nr_str_len(vn->id);
                 for (int64_t k = 0; k < name_len; k++) {
                     uint8_t ch = (uint8_t)(((uint8_t)(vn->id->data[k])));
                     if (((ch >= 97) && (ch <= 122))) {
@@ -167,13 +167,13 @@ void native_compile_file__first_pass(CompilerState* s, AstNodeList body) {
     }
 }
 
-int64_t native_compile_file__has_decorator(const AstFunctionDef* restrict fd, const MpStr* restrict name) {
+int64_t native_compile_file__has_decorator(const AstFunctionDef* restrict fd, const NrStr* restrict name) {
     "Check if a function definition has a decorator with the given name.";
     for (int64_t i = 0; i < fd->decorators.count; i++) {
         AstNode* dec = fd->decorators.items[i];
         if (((dec != NULL) && (dec->tag == TAG_NAME))) {
             AstName* dn = dec->data;
-            if (mp_str_eq(dn->id, name)) {
+            if (nr_str_eq(dn->id, name)) {
                 return 1;
             }
         }
@@ -190,25 +190,25 @@ void native_compile_file__scan_annotation_for_list(CompilerState* restrict s, co
     AstNode* sub_val = asub->value;
     if (((sub_val != NULL) && (sub_val->tag == TAG_NAME))) {
         AstName* bn = sub_val->data;
-        if ((mp_str_eq(bn->id, (&(MpStr){.data=(char*)"own",.len=3})) && (asub->slice != NULL) && (asub->slice->tag == TAG_SUBSCRIPT))) {
+        if ((nr_str_eq(bn->id, (&(NrStr){.data=(char*)"own",.len=3})) && (asub->slice != NULL) && (asub->slice->tag == TAG_SUBSCRIPT))) {
             asub = asub->slice->data;
             sub_val = asub->value;
         }
     }
     if (((sub_val != NULL) && (sub_val->tag == TAG_NAME))) {
         AstName* bn2 = sub_val->data;
-        if ((mp_str_eq(bn2->id, (&(MpStr){.data=(char*)"typed_list",.len=10})) || mp_str_eq(bn2->id, (&(MpStr){.data=(char*)"list",.len=4})))) {
-            MpStr* elem_t = native_type_map_native_map_type(asub->slice);
+        if ((nr_str_eq(bn2->id, (&(NrStr){.data=(char*)"typed_list",.len=10})) || nr_str_eq(bn2->id, (&(NrStr){.data=(char*)"list",.len=4})))) {
+            NrStr* elem_t = native_type_map_native_map_type(asub->slice);
             if ((strmap_strmap_has((&s->typed_lists), elem_t) == 0)) {
-                MpStr* list_name = mp_str_concat(elem_t, (&(MpStr){.data=(char*)"List",.len=4}));
-                if (mp_str_eq(elem_t, (&(MpStr){.data=(char*)"int64_t",.len=7}))) {
-                    list_name = mp_str_new("IntList");
+                NrStr* list_name = nr_str_concat(elem_t, (&(NrStr){.data=(char*)"List",.len=4}));
+                if (nr_str_eq(elem_t, (&(NrStr){.data=(char*)"int64_t",.len=7}))) {
+                    list_name = nr_str_new("IntList");
                 } else 
-                if (mp_str_eq(elem_t, (&(MpStr){.data=(char*)"double",.len=6}))) {
-                    list_name = mp_str_new("FloatList");
+                if (nr_str_eq(elem_t, (&(NrStr){.data=(char*)"double",.len=6}))) {
+                    list_name = nr_str_new("FloatList");
                 } else 
-                if (mp_str_eq(elem_t, (&(MpStr){.data=(char*)"uint8_t",.len=7}))) {
-                    list_name = mp_str_new("ByteList");
+                if (nr_str_eq(elem_t, (&(NrStr){.data=(char*)"uint8_t",.len=7}))) {
+                    list_name = nr_str_new("ByteList");
                 }
                 strmap_strmap_set((&s->typed_lists), elem_t, list_name);
             }
@@ -230,18 +230,18 @@ void native_compile_file__scan_typed_lists(CompilerState* s, AstNodeList body) {
                 AstNode* sub_val = asub->value;
                 if (((sub_val != NULL) && (sub_val->tag == TAG_NAME))) {
                     AstName* bn = sub_val->data;
-                    if ((mp_str_eq(bn->id, (&(MpStr){.data=(char*)"typed_list",.len=10})) || mp_str_eq(bn->id, (&(MpStr){.data=(char*)"list",.len=4})))) {
-                        MpStr* elem_t = native_type_map_native_map_type(asub->slice);
+                    if ((nr_str_eq(bn->id, (&(NrStr){.data=(char*)"typed_list",.len=10})) || nr_str_eq(bn->id, (&(NrStr){.data=(char*)"list",.len=4})))) {
+                        NrStr* elem_t = native_type_map_native_map_type(asub->slice);
                         if ((strmap_strmap_has((&s->typed_lists), elem_t) == 0)) {
-                            MpStr* list_name = mp_str_concat(elem_t, (&(MpStr){.data=(char*)"List",.len=4}));
-                            if (mp_str_eq(elem_t, (&(MpStr){.data=(char*)"int64_t",.len=7}))) {
-                                list_name = mp_str_new("IntList");
+                            NrStr* list_name = nr_str_concat(elem_t, (&(NrStr){.data=(char*)"List",.len=4}));
+                            if (nr_str_eq(elem_t, (&(NrStr){.data=(char*)"int64_t",.len=7}))) {
+                                list_name = nr_str_new("IntList");
                             } else 
-                            if (mp_str_eq(elem_t, (&(MpStr){.data=(char*)"double",.len=6}))) {
-                                list_name = mp_str_new("FloatList");
+                            if (nr_str_eq(elem_t, (&(NrStr){.data=(char*)"double",.len=6}))) {
+                                list_name = nr_str_new("FloatList");
                             } else 
-                            if (mp_str_eq(elem_t, (&(MpStr){.data=(char*)"uint8_t",.len=7}))) {
-                                list_name = mp_str_new("ByteList");
+                            if (nr_str_eq(elem_t, (&(NrStr){.data=(char*)"uint8_t",.len=7}))) {
+                                list_name = nr_str_new("ByteList");
                             }
                             strmap_strmap_set((&s->typed_lists), elem_t, list_name);
                         }
@@ -279,19 +279,19 @@ void native_compile_file__emit_typed_lists(CompilerState* s) {
     StrMap* m = (&s->typed_lists);
     for (int64_t i = 0; i < m->cap; i++) {
         if ((m->states[i] == 1)) {
-            MpStr* elem_t = m->keys[i];
-            MpStr* list_name = m->values[i];
-            MpStr* N = list_name;
-            MpStr* T = elem_t;
-            native_compile_file__emit_raw(s, mp_str_format("typedef struct { %s* data; int64_t len; int64_t cap; } %s;", T->data, N->data));
-            native_compile_file__emit_raw(s, mp_str_format("static inline %s* %s_new(void) { %s* l = (%s*)malloc(sizeof(%s)); l->cap=8; l->len=0; l->data=(%s*)malloc(sizeof(%s)*l->cap); return l; }", N->data, N->data, N->data, N->data, N->data, T->data, T->data));
-            native_compile_file__emit_raw(s, mp_str_format("static inline void %s_append(%s* l, %s v) { if(l->len>=l->cap){l->cap*=2;l->data=(%s*)realloc(l->data,sizeof(%s)*l->cap);} l->data[l->len++]=v; }", N->data, N->data, T->data, T->data, T->data));
-            native_compile_file__emit_raw(s, mp_str_format("static inline %s %s_get(%s* l, int64_t i) { return l->data[i]; }", T->data, N->data, N->data));
-            native_compile_file__emit_raw(s, mp_str_format("static inline void %s_set(%s* l, int64_t i, %s v) { l->data[i]=v; }", N->data, N->data, T->data));
-            native_compile_file__emit_raw(s, mp_str_format("static inline int64_t %s_len(%s* l) { return l->len; }", N->data, N->data));
-            native_compile_file__emit_raw(s, mp_str_format("static inline %s %s_pop(%s* l) { return l->data[--l->len]; }", T->data, N->data, N->data));
-            native_compile_file__emit_raw(s, mp_str_format("static inline void %s_free(%s* l) { if(l){free(l->data);free(l);} }", N->data, N->data));
-            native_compile_file__emit_raw(s, mp_str_new(""));
+            NrStr* elem_t = m->keys[i];
+            NrStr* list_name = m->values[i];
+            NrStr* N = list_name;
+            NrStr* T = elem_t;
+            native_compile_file__emit_raw(s, nr_str_format("typedef struct { %s* data; int64_t len; int64_t cap; } %s;", T->data, N->data));
+            native_compile_file__emit_raw(s, nr_str_format("static inline %s* %s_new(void) { %s* l = (%s*)malloc(sizeof(%s)); l->cap=8; l->len=0; l->data=(%s*)malloc(sizeof(%s)*l->cap); return l; }", N->data, N->data, N->data, N->data, N->data, T->data, T->data));
+            native_compile_file__emit_raw(s, nr_str_format("static inline void %s_append(%s* l, %s v) { if(l->len>=l->cap){l->cap*=2;l->data=(%s*)realloc(l->data,sizeof(%s)*l->cap);} l->data[l->len++]=v; }", N->data, N->data, T->data, T->data, T->data));
+            native_compile_file__emit_raw(s, nr_str_format("static inline %s %s_get(%s* l, int64_t i) { return l->data[i]; }", T->data, N->data, N->data));
+            native_compile_file__emit_raw(s, nr_str_format("static inline void %s_set(%s* l, int64_t i, %s v) { l->data[i]=v; }", N->data, N->data, T->data));
+            native_compile_file__emit_raw(s, nr_str_format("static inline int64_t %s_len(%s* l) { return l->len; }", N->data, N->data));
+            native_compile_file__emit_raw(s, nr_str_format("static inline %s %s_pop(%s* l) { return l->data[--l->len]; }", T->data, N->data, N->data));
+            native_compile_file__emit_raw(s, nr_str_format("static inline void %s_free(%s* l) { if(l){free(l->data);free(l);} }", N->data, N->data));
+            native_compile_file__emit_raw(s, nr_str_new(""));
         }
     }
 }
@@ -302,7 +302,7 @@ int64_t native_compile_file__has_test_funcs(AstNodeList body) {
         AstNode* node = body.items[i];
         if (((node != NULL) && (node->tag == TAG_FUNCTION_DEF))) {
             AstFunctionDef* fd = node->data;
-            if (native_compile_file__has_decorator(fd, mp_str_new("test"))) {
+            if (native_compile_file__has_decorator(fd, nr_str_new("test"))) {
                 return 1;
             }
         }
@@ -327,16 +327,16 @@ int64_t native_compile_file__has_variadic_funcs(AstNodeList body) {
 
 void native_compile_file__emit_includes(CompilerState* s, AstNodeList body) {
     if ((s->safe_mode != 0)) {
-        native_compile_file__emit_raw(s, mp_str_new("#define MP_SAFE"));
+        native_compile_file__emit_raw(s, nr_str_new("#define NR_SAFE"));
     }
-    native_compile_file__emit_raw(s, mp_str_new("#include \"micropy_rt.h\""));
+    native_compile_file__emit_raw(s, nr_str_new("#include \"nathra_rt.h\""));
     if (native_compile_file__has_variadic_funcs(body)) {
-        native_compile_file__emit_raw(s, mp_str_new("#include <stdarg.h>"));
+        native_compile_file__emit_raw(s, nr_str_new("#include <stdarg.h>"));
     }
     if (native_compile_file__has_test_funcs(body)) {
-        native_compile_file__emit_raw(s, mp_str_new("#include \"micropy_test.h\""));
+        native_compile_file__emit_raw(s, nr_str_new("#include \"nathra_test.h\""));
     }
-    native_compile_file__emit_raw(s, mp_str_new(""));
+    native_compile_file__emit_raw(s, nr_str_new(""));
 }
 
 void native_compile_file__emit_forward_typedefs(CompilerState* s, AstNodeList body) {
@@ -346,11 +346,11 @@ void native_compile_file__emit_forward_typedefs(CompilerState* s, AstNodeList bo
         if (((node != NULL) && (node->tag == TAG_CLASS_DEF))) {
             AstClassDef* cd = node->data;
             if (strmap_strmap_has((&s->structs), cd->name)) {
-                native_compile_file__emit_raw(s, mp_str_format("typedef struct %s %s;", cd->name->data, cd->name->data));
+                native_compile_file__emit_raw(s, nr_str_format("typedef struct %s %s;", cd->name->data, cd->name->data));
             }
         }
     }
-    native_compile_file__emit_raw(s, mp_str_new(""));
+    native_compile_file__emit_raw(s, nr_str_new(""));
 }
 
 void native_compile_file__emit_struct_defs(CompilerState* s, AstNodeList body) {
@@ -365,74 +365,74 @@ void native_compile_file__emit_struct_defs(CompilerState* s, AstNodeList body) {
         if ((fl == NULL)) {
             continue;
         }
-        native_compile_file__emit_raw(s, mp_str_format("typedef struct %s {", cd->name->data));
+        native_compile_file__emit_raw(s, nr_str_format("typedef struct %s {", cd->name->data));
         for (int64_t j = 0; j < fl->count; j++) {
-            MpStr* ftype = fl->entries[j].ctype;
-            MpStr* fname = fl->entries[j].name;
-            if (mp_str_starts_with(ftype, mp_str_new("__arr_"))) {
-                MpStr* inner = mp_str_slice(ftype, 6, mp_str_len(ftype));
+            NrStr* ftype = fl->entries[j].ctype;
+            NrStr* fname = fl->entries[j].name;
+            if (nr_str_starts_with(ftype, nr_str_new("__arr_"))) {
+                NrStr* inner = nr_str_slice(ftype, 6, nr_str_len(ftype));
                 int64_t last_us = (-1);
-                for (int64_t k = 0; k < mp_str_len(inner); k++) {
+                for (int64_t k = 0; k < nr_str_len(inner); k++) {
                     if ((((uint8_t)(inner->data[k])) == 95)) {
                         last_us = k;
                     }
                 }
                 if ((last_us > 0)) {
-                    MpStr* et = mp_str_slice(inner, 0, last_us);
-                    MpStr* sz = mp_str_slice(inner, (last_us + 1), mp_str_len(inner));
-                    native_compile_file__emit_raw(s, mp_str_format("    %s %s[%s];", et->data, fname->data, sz->data));
+                    NrStr* et = nr_str_slice(inner, 0, last_us);
+                    NrStr* sz = nr_str_slice(inner, (last_us + 1), nr_str_len(inner));
+                    native_compile_file__emit_raw(s, nr_str_format("    %s %s[%s];", et->data, fname->data, sz->data));
                 } else {
-                    native_compile_file__emit_raw(s, mp_str_format("    /* array field %s */", fname->data));
+                    native_compile_file__emit_raw(s, nr_str_format("    /* array field %s */", fname->data));
                 }
             } else 
-            if (mp_str_starts_with(ftype, mp_str_new("__bf_"))) {
-                MpStr* bf_inner = mp_str_slice(ftype, 5, mp_str_len(ftype));
+            if (nr_str_starts_with(ftype, nr_str_new("__bf_"))) {
+                NrStr* bf_inner = nr_str_slice(ftype, 5, nr_str_len(ftype));
                 int64_t bf_last = (-1);
-                for (int64_t bk = 0; bk < mp_str_len(bf_inner); bk++) {
+                for (int64_t bk = 0; bk < nr_str_len(bf_inner); bk++) {
                     if ((((uint8_t)(bf_inner->data[bk])) == 95)) {
                         bf_last = bk;
                     }
                 }
                 if ((bf_last > 0)) {
-                    MpStr* bf_t2 = mp_str_slice(bf_inner, 0, bf_last);
-                    MpStr* bf_w2 = mp_str_slice(bf_inner, (bf_last + 1), mp_str_len(bf_inner));
-                    native_compile_file__emit_raw(s, mp_str_format("    %s %s : %s;", bf_t2->data, fname->data, bf_w2->data));
+                    NrStr* bf_t2 = nr_str_slice(bf_inner, 0, bf_last);
+                    NrStr* bf_w2 = nr_str_slice(bf_inner, (bf_last + 1), nr_str_len(bf_inner));
+                    native_compile_file__emit_raw(s, nr_str_format("    %s %s : %s;", bf_t2->data, fname->data, bf_w2->data));
                 } else {
-                    native_compile_file__emit_raw(s, mp_str_format("    /* bitfield %s */", fname->data));
+                    native_compile_file__emit_raw(s, nr_str_format("    /* bitfield %s */", fname->data));
                 }
             } else 
-            if ((mp_str_eq(ftype, (&(MpStr){.data=(char*)"__funcptr__",.len=11})) || mp_str_eq(ftype, (&(MpStr){.data=(char*)"__vec__",.len=7})) || mp_str_eq(ftype, (&(MpStr){.data=(char*)"__typed_list__",.len=14})))) {
-                native_compile_file__emit_raw(s, mp_str_format("    /* TODO: %s %s */", ftype->data, fname->data));
+            if ((nr_str_eq(ftype, (&(NrStr){.data=(char*)"__funcptr__",.len=11})) || nr_str_eq(ftype, (&(NrStr){.data=(char*)"__vec__",.len=7})) || nr_str_eq(ftype, (&(NrStr){.data=(char*)"__typed_list__",.len=14})))) {
+                native_compile_file__emit_raw(s, nr_str_format("    /* TODO: %s %s */", ftype->data, fname->data));
             } else {
-                native_compile_file__emit_raw(s, mp_str_format("    %s %s;", ftype->data, fname->data));
+                native_compile_file__emit_raw(s, nr_str_format("    %s %s;", ftype->data, fname->data));
             }
         }
-        native_compile_file__emit_raw(s, mp_str_format("} %s;", cd->name->data));
-        MpStr* arg_list = mp_str_new("");
-        MpStr* body_list = mp_str_new("");
+        native_compile_file__emit_raw(s, nr_str_format("} %s;", cd->name->data));
+        NrStr* arg_list = nr_str_new("");
+        NrStr* body_list = nr_str_new("");
         int32_t ctor_count = (int32_t)(0);
         for (int64_t j = 0; j < fl->count; j++) {
-            MpStr* fname2 = fl->entries[j].name;
-            MpStr* ftype2 = fl->entries[j].ctype;
-            if (mp_str_starts_with(ftype2, mp_str_new("__"))) {
+            NrStr* fname2 = fl->entries[j].name;
+            NrStr* ftype2 = fl->entries[j].ctype;
+            if (nr_str_starts_with(ftype2, nr_str_new("__"))) {
                 continue;
             }
             if ((ctor_count > 0)) {
-                arg_list = mp_str_concat(arg_list, (&(MpStr){.data=(char*)", ",.len=2}));
+                arg_list = nr_str_concat(arg_list, (&(NrStr){.data=(char*)", ",.len=2}));
             }
-            arg_list = mp_str_concat(arg_list, mp_str_format("%s %s", ftype2->data, fname2->data));
-            body_list = mp_str_concat(body_list, mp_str_format("    _s.%s = %s;\n", fname2->data, fname2->data));
+            arg_list = nr_str_concat(arg_list, nr_str_format("%s %s", ftype2->data, fname2->data));
+            body_list = nr_str_concat(body_list, nr_str_format("    _s.%s = %s;\n", fname2->data, fname2->data));
             ctor_count = (int32_t)((ctor_count + 1));
         }
         if ((ctor_count == 0)) {
-            arg_list = mp_str_new("void");
+            arg_list = nr_str_new("void");
         }
-        native_compile_file__emit_raw(s, mp_str_format("static inline %s _mp_make_%s(%s) {", cd->name->data, cd->name->data, arg_list->data));
-        native_compile_file__emit_raw(s, mp_str_format("    %s _s = {0};", cd->name->data));
+        native_compile_file__emit_raw(s, nr_str_format("static inline %s _nr_make_%s(%s) {", cd->name->data, cd->name->data, arg_list->data));
+        native_compile_file__emit_raw(s, nr_str_format("    %s _s = {0};", cd->name->data));
         native_compile_file__emit_raw(s, body_list);
-        native_compile_file__emit_raw(s, mp_str_new("    return _s;"));
-        native_compile_file__emit_raw(s, mp_str_new("}"));
-        native_compile_file__emit_raw(s, mp_str_new(""));
+        native_compile_file__emit_raw(s, nr_str_new("    return _s;"));
+        native_compile_file__emit_raw(s, nr_str_new("}"));
+        native_compile_file__emit_raw(s, nr_str_new(""));
     }
 }
 
@@ -447,7 +447,7 @@ void native_compile_file__emit_enums(CompilerState* s, AstNodeList body) {
         if ((strmap_strset_has((&s->extern_funcs), cd->name) == 0)) {
             continue;
         }
-        native_compile_file__emit_raw(s, mp_str_format("typedef enum {", cd->name->data));
+        native_compile_file__emit_raw(s, nr_str_format("typedef enum {", cd->name->data));
         for (int64_t j = 0; j < cd->body.count; j++) {
             AstNode* member = cd->body.items[j];
             if (((member != NULL) && (member->tag == TAG_ASSIGN))) {
@@ -456,18 +456,18 @@ void native_compile_file__emit_enums(CompilerState* s, AstNodeList body) {
                     AstNode* tgt = ma->targets.items[0];
                     if ((tgt->tag == TAG_NAME)) {
                         AstName* mn = tgt->data;
-                        MpStr* mval = native_codegen_expr_native_compile_expr(s, ma->value);
-                        MpStr* comma = mp_str_new(",");
+                        NrStr* mval = native_codegen_expr_native_compile_expr(s, ma->value);
+                        NrStr* comma = nr_str_new(",");
                         if ((j == (cd->body.count - 1))) {
-                            comma = mp_str_new("");
+                            comma = nr_str_new("");
                         }
-                        native_compile_file__emit_raw(s, mp_str_format("    %s_%s = %s%s", cd->name->data, mn->id->data, mval->data, comma->data));
+                        native_compile_file__emit_raw(s, nr_str_format("    %s_%s = %s%s", cd->name->data, mn->id->data, mval->data, comma->data));
                     }
                 }
             }
         }
-        native_compile_file__emit_raw(s, mp_str_format("} %s;", cd->name->data));
-        native_compile_file__emit_raw(s, mp_str_new(""));
+        native_compile_file__emit_raw(s, nr_str_format("} %s;", cd->name->data));
+        native_compile_file__emit_raw(s, nr_str_new(""));
     }
 }
 
@@ -484,10 +484,10 @@ void native_compile_file__emit_constants(CompilerState* s, AstNodeList body) {
         }
         AstName* vn = aa->target->data;
         if (strmap_strmap_has((&s->constants), vn->id)) {
-            MpStr* ct = strmap_strmap_get((&s->constants), vn->id);
+            NrStr* ct = strmap_strmap_get((&s->constants), vn->id);
             if ((aa->value != NULL)) {
-                MpStr* val = native_codegen_expr_native_compile_expr(s, aa->value);
-                native_compile_file__emit_raw(s, mp_str_format("const %s %s = %s;", ct->data, vn->id->data, val->data));
+                NrStr* val = native_codegen_expr_native_compile_expr(s, aa->value);
+                native_compile_file__emit_raw(s, nr_str_format("const %s %s = %s;", ct->data, vn->id->data, val->data));
             }
         }
     }
@@ -506,12 +506,12 @@ void native_compile_file__emit_globals(CompilerState* s, AstNodeList body) {
         }
         AstName* vn = aa->target->data;
         if (strmap_strmap_has((&s->mutable_globals), vn->id)) {
-            MpStr* ct = strmap_strmap_get((&s->mutable_globals), vn->id);
+            NrStr* ct = strmap_strmap_get((&s->mutable_globals), vn->id);
             if ((aa->value != NULL)) {
-                MpStr* val = native_codegen_expr_native_compile_expr(s, aa->value);
-                native_compile_file__emit_raw(s, mp_str_format("%s %s = %s;", ct->data, vn->id->data, val->data));
+                NrStr* val = native_codegen_expr_native_compile_expr(s, aa->value);
+                native_compile_file__emit_raw(s, nr_str_format("%s %s = %s;", ct->data, vn->id->data, val->data));
             } else {
-                native_compile_file__emit_raw(s, mp_str_format("%s %s;", ct->data, vn->id->data));
+                native_compile_file__emit_raw(s, nr_str_format("%s %s;", ct->data, vn->id->data));
             }
         }
     }
@@ -545,78 +545,78 @@ void native_compile_file__emit_function_prototypes(CompilerState* s, AstNodeList
         if (native_compile_file__is_extern_func(fd)) {
             continue;
         }
-        MpStr* ret = native_type_map_native_map_type(fd->returns);
-        if (mp_str_starts_with(ret, mp_str_new("__own__ "))) {
-            ret = mp_str_slice(ret, 8, mp_str_len(ret));
+        NrStr* ret = native_type_map_native_map_type(fd->returns);
+        if (nr_str_starts_with(ret, nr_str_new("__own__ "))) {
+            ret = nr_str_slice(ret, 8, nr_str_len(ret));
         }
-        if (mp_str_eq(ret, (&(MpStr){.data=(char*)"__typed_list__",.len=14}))) {
-            MpStr* tl_ret_e = native_type_map_native_get_typed_list_elem(fd->returns);
-            MpStr* tl_ret_n = strmap_strmap_get((&s->typed_lists), tl_ret_e);
+        if (nr_str_eq(ret, (&(NrStr){.data=(char*)"__typed_list__",.len=14}))) {
+            NrStr* tl_ret_e = native_type_map_native_get_typed_list_elem(fd->returns);
+            NrStr* tl_ret_n = strmap_strmap_get((&s->typed_lists), tl_ret_e);
             if ((tl_ret_n != NULL)) {
-                ret = mp_str_concat(tl_ret_n, (&(MpStr){.data=(char*)"*",.len=1}));
+                ret = nr_str_concat(tl_ret_n, (&(NrStr){.data=(char*)"*",.len=1}));
             }
         }
-        if (mp_str_eq(fd->name, (&(MpStr){.data=(char*)"main",.len=4}))) {
-            ret = mp_str_new("int");
+        if (nr_str_eq(fd->name, (&(NrStr){.data=(char*)"main",.len=4}))) {
+            ret = nr_str_new("int");
         }
         AstArguments* args_node = fd->args->data;
-        MpStr* arg_str = mp_str_new("");
+        NrStr* arg_str = nr_str_new("");
         for (int64_t j = 0; j < args_node->args.count; j++) {
             AstArg* arg = args_node->args.items[j]->data;
-            MpStr* atype = native_type_map_native_map_type(arg->annotation);
+            NrStr* atype = native_type_map_native_map_type(arg->annotation);
             AstNode* p_ann = arg->annotation;
-            if (mp_str_starts_with(atype, mp_str_new("__own__ "))) {
-                atype = mp_str_slice(atype, 8, mp_str_len(atype));
+            if (nr_str_starts_with(atype, nr_str_new("__own__ "))) {
+                atype = nr_str_slice(atype, 8, nr_str_len(atype));
                 if (((p_ann != NULL) && (p_ann->tag == TAG_SUBSCRIPT))) {
                     AstSubscript* own_s = p_ann->data;
                     p_ann = own_s->slice;
                 }
             }
-            if (mp_str_eq(atype, (&(MpStr){.data=(char*)"__typed_list__",.len=14}))) {
-                MpStr* tl_elem = native_type_map_native_get_typed_list_elem(p_ann);
-                MpStr* tl_name = strmap_strmap_get((&s->typed_lists), tl_elem);
+            if (nr_str_eq(atype, (&(NrStr){.data=(char*)"__typed_list__",.len=14}))) {
+                NrStr* tl_elem = native_type_map_native_get_typed_list_elem(p_ann);
+                NrStr* tl_name = strmap_strmap_get((&s->typed_lists), tl_elem);
                 if ((tl_name != NULL)) {
-                    atype = mp_str_concat(tl_name, (&(MpStr){.data=(char*)"*",.len=1}));
+                    atype = nr_str_concat(tl_name, (&(NrStr){.data=(char*)"*",.len=1}));
                 }
             }
             if ((j > 0)) {
-                arg_str = mp_str_concat(arg_str, (&(MpStr){.data=(char*)", ",.len=2}));
+                arg_str = nr_str_concat(arg_str, (&(NrStr){.data=(char*)", ",.len=2}));
             }
-            arg_str = mp_str_concat(arg_str, mp_str_format("%s %s", atype->data, arg->name->data));
+            arg_str = nr_str_concat(arg_str, nr_str_format("%s %s", atype->data, arg->name->data));
         }
         if ((args_node->vararg != NULL)) {
             if ((args_node->args.count > 0)) {
-                arg_str = mp_str_concat(arg_str, (&(MpStr){.data=(char*)", ...",.len=5}));
+                arg_str = nr_str_concat(arg_str, (&(NrStr){.data=(char*)", ...",.len=5}));
             } else {
-                arg_str = mp_str_new("...");
+                arg_str = nr_str_new("...");
             }
         } else 
         if ((args_node->args.count == 0)) {
-            arg_str = mp_str_new("void");
+            arg_str = nr_str_new("void");
         }
-        native_compile_file__emit_raw(s, mp_str_format("%s %s(%s);", ret->data, fd->name->data, arg_str->data));
+        native_compile_file__emit_raw(s, nr_str_format("%s %s(%s);", ret->data, fd->name->data, arg_str->data));
     }
-    native_compile_file__emit_raw(s, mp_str_new(""));
+    native_compile_file__emit_raw(s, nr_str_new(""));
 }
 
-void native_compile_file__compile_one_func(CompilerState* restrict s, AstFunctionDef* restrict fd, const MpStr* restrict prefix) {
+void native_compile_file__compile_one_func(CompilerState* restrict s, AstFunctionDef* restrict fd, const NrStr* restrict prefix) {
     "Compile a single function definition with optional name prefix.";
     if (native_compile_file__is_extern_func(fd)) {
         return;
     }
-    MpStr* ret = native_type_map_native_map_type(fd->returns);
-    if (mp_str_starts_with(ret, mp_str_new("__own__ "))) {
-        ret = mp_str_slice(ret, 8, mp_str_len(ret));
+    NrStr* ret = native_type_map_native_map_type(fd->returns);
+    if (nr_str_starts_with(ret, nr_str_new("__own__ "))) {
+        ret = nr_str_slice(ret, 8, nr_str_len(ret));
     }
-    if (mp_str_eq(ret, (&(MpStr){.data=(char*)"__typed_list__",.len=14}))) {
-        MpStr* tl_ret_e2 = native_type_map_native_get_typed_list_elem(fd->returns);
-        MpStr* tl_ret_n2 = strmap_strmap_get((&s->typed_lists), tl_ret_e2);
+    if (nr_str_eq(ret, (&(NrStr){.data=(char*)"__typed_list__",.len=14}))) {
+        NrStr* tl_ret_e2 = native_type_map_native_get_typed_list_elem(fd->returns);
+        NrStr* tl_ret_n2 = strmap_strmap_get((&s->typed_lists), tl_ret_e2);
         if ((tl_ret_n2 != NULL)) {
-            ret = mp_str_concat(tl_ret_n2, (&(MpStr){.data=(char*)"*",.len=1}));
+            ret = nr_str_concat(tl_ret_n2, (&(NrStr){.data=(char*)"*",.len=1}));
         }
     }
     AstArguments* args_node = fd->args->data;
-    MpStr* arg_str = mp_str_new("");
+    NrStr* arg_str = nr_str_new("");
     strmap_strmap_free((&s->local_vars));
     s->local_vars = strmap_strmap_new(32);
     strmap_strmap_free((&s->func_args));
@@ -627,71 +627,71 @@ void native_compile_file__compile_one_func(CompilerState* restrict s, AstFunctio
     s->list_vars = strmap_strmap_new(16);
     for (int64_t j = 0; j < args_node->args.count; j++) {
         AstArg* arg = args_node->args.items[j]->data;
-        MpStr* atype = native_type_map_native_map_type(arg->annotation);
+        NrStr* atype = native_type_map_native_map_type(arg->annotation);
         AstNode* d_ann = arg->annotation;
-        if (mp_str_starts_with(atype, mp_str_new("__own__ "))) {
-            atype = mp_str_slice(atype, 8, mp_str_len(atype));
+        if (nr_str_starts_with(atype, nr_str_new("__own__ "))) {
+            atype = nr_str_slice(atype, 8, nr_str_len(atype));
             if (((d_ann != NULL) && (d_ann->tag == TAG_SUBSCRIPT))) {
                 AstSubscript* own_s2 = d_ann->data;
                 d_ann = own_s2->slice;
             }
         }
-        if (mp_str_eq(atype, (&(MpStr){.data=(char*)"__typed_list__",.len=14}))) {
-            MpStr* tl_elem2 = native_type_map_native_get_typed_list_elem(d_ann);
-            MpStr* tl_name2 = strmap_strmap_get((&s->typed_lists), tl_elem2);
+        if (nr_str_eq(atype, (&(NrStr){.data=(char*)"__typed_list__",.len=14}))) {
+            NrStr* tl_elem2 = native_type_map_native_get_typed_list_elem(d_ann);
+            NrStr* tl_name2 = strmap_strmap_get((&s->typed_lists), tl_elem2);
             if ((tl_name2 != NULL)) {
-                atype = mp_str_concat(tl_name2, (&(MpStr){.data=(char*)"*",.len=1}));
+                atype = nr_str_concat(tl_name2, (&(NrStr){.data=(char*)"*",.len=1}));
             }
         }
-        if ((mp_str_eq(arg->name, (&(MpStr){.data=(char*)"self",.len=4})) && (mp_str_len(prefix) > 0))) {
-            MpStr* struct_name = mp_str_slice(prefix, 0, (mp_str_len(prefix) - 1));
-            atype = mp_str_concat(struct_name, (&(MpStr){.data=(char*)"*",.len=1}));
+        if ((nr_str_eq(arg->name, (&(NrStr){.data=(char*)"self",.len=4})) && (nr_str_len(prefix) > 0))) {
+            NrStr* struct_name = nr_str_slice(prefix, 0, (nr_str_len(prefix) - 1));
+            atype = nr_str_concat(struct_name, (&(NrStr){.data=(char*)"*",.len=1}));
         }
         if ((j > 0)) {
-            arg_str = mp_str_concat(arg_str, (&(MpStr){.data=(char*)", ",.len=2}));
+            arg_str = nr_str_concat(arg_str, (&(NrStr){.data=(char*)", ",.len=2}));
         }
-        arg_str = mp_str_concat(arg_str, mp_str_format("%s %s", atype->data, arg->name->data));
+        arg_str = nr_str_concat(arg_str, nr_str_format("%s %s", atype->data, arg->name->data));
         strmap_strmap_set((&s->func_args), arg->name, atype);
     }
     if ((args_node->vararg != NULL)) {
         if ((args_node->args.count > 0)) {
-            arg_str = mp_str_concat(arg_str, (&(MpStr){.data=(char*)", ...",.len=5}));
+            arg_str = nr_str_concat(arg_str, (&(NrStr){.data=(char*)", ...",.len=5}));
         } else {
-            arg_str = mp_str_new("...");
+            arg_str = nr_str_new("...");
         }
     } else 
     if ((args_node->args.count == 0)) {
-        arg_str = mp_str_new("void");
+        arg_str = nr_str_new("void");
     }
     s->current_func_ret_type = ret;
-    MpStr* fname = fd->name;
-    if ((mp_str_len(prefix) > 0)) {
-        fname = mp_str_concat(prefix, fd->name);
+    NrStr* fname = fd->name;
+    if ((nr_str_len(prefix) > 0)) {
+        fname = nr_str_concat(prefix, fd->name);
     }
-    if (mp_str_eq(fname, (&(MpStr){.data=(char*)"main",.len=4}))) {
-        native_compile_file__emit_raw(s, mp_str_new("int main(void) {"));
+    if (nr_str_eq(fname, (&(NrStr){.data=(char*)"main",.len=4}))) {
+        native_compile_file__emit_raw(s, nr_str_new("int main(void) {"));
     } else {
-        native_compile_file__emit_raw(s, mp_str_format("%s %s(%s) {", ret->data, fname->data, arg_str->data));
+        native_compile_file__emit_raw(s, nr_str_format("%s %s(%s) {", ret->data, fname->data, arg_str->data));
     }
     s->indent = (int32_t)(1);
     for (int64_t j = 0; j < fd->body.count; j++) {
         native_codegen_stmt_native_compile_stmt(s, fd->body.items[j]);
     }
     s->indent = (int32_t)(0);
-    native_compile_file__emit_raw(s, mp_str_new("}"));
-    native_compile_file__emit_raw(s, mp_str_new(""));
+    native_compile_file__emit_raw(s, nr_str_new("}"));
+    native_compile_file__emit_raw(s, nr_str_new(""));
 }
 
-MpStr* native_compile_file__edge_key(const MpStr* restrict a, const MpStr* restrict b) {
+NrStr* native_compile_file__edge_key(const NrStr* restrict a, const NrStr* restrict b) {
     "Build a sorted edge key for undirected graph: 'min|max'.";
-    MpStr* sep = mp_str_new("|");
+    NrStr* sep = nr_str_new("|");
     if ((strcmp(a->data, b->data) < 0)) {
-        return mp_str_concat(mp_str_concat(a, sep), b);
+        return nr_str_concat(nr_str_concat(a, sep), b);
     }
-    return mp_str_concat(mp_str_concat(b, sep), a);
+    return nr_str_concat(nr_str_concat(b, sep), a);
 }
 
-void native_compile_file__scan_calls_in_node(const AstNode* restrict node, MpStr* restrict caller, StrSet* restrict func_names, StrMap* restrict edges, int32_t depth, int64_t is_hot) {
+void native_compile_file__scan_calls_in_node(const AstNode* restrict node, NrStr* restrict caller, StrSet* restrict func_names, StrMap* restrict edges, int32_t depth, int64_t is_hot) {
     "Scan a single node for direct calls to known functions.";
     if ((node == NULL)) {
         return;
@@ -700,8 +700,8 @@ void native_compile_file__scan_calls_in_node(const AstNode* restrict node, MpStr
         AstCall* c = node->data;
         if (((c->func != NULL) && (c->func->tag == TAG_NAME))) {
             AstName* fn = c->func->data;
-            if (((!mp_str_eq(fn->id, caller)) && strmap_strset_has(func_names, fn->id))) {
-                MpStr* key = native_compile_file__edge_key(caller, fn->id);
+            if (((!nr_str_eq(fn->id, caller)) && strmap_strset_has(func_names, fn->id))) {
+                NrStr* key = native_compile_file__edge_key(caller, fn->id);
                 int64_t w = 1;
                 for (int64_t d = 0; d < depth; d++) {
                     w = (w * 10);
@@ -738,7 +738,7 @@ void native_compile_file__scan_calls_in_node(const AstNode* restrict node, MpStr
     }
 }
 
-void native_compile_file__walk_calls_weighted(AstNodeList stmts, MpStr* restrict caller, StrSet* restrict func_names, StrMap* restrict edges, int32_t depth, int64_t is_hot) {
+void native_compile_file__walk_calls_weighted(AstNodeList stmts, NrStr* restrict caller, StrSet* restrict func_names, StrMap* restrict edges, int32_t depth, int64_t is_hot) {
     "Walk statements recursively, accumulating weighted call edges.";
     for (int64_t i = 0; i < stmts.count; i++) {
         AstNode* node = stmts.items[i];
@@ -774,27 +774,27 @@ void native_compile_file__reorder_by_call_graph(const AstFunctionDef** restrict 
     "Greedy layout: seed with heaviest edge, insert remaining adjacent to highest-weight neighbor.";
     if ((count <= 1)) {
         for (int64_t i = 0; i < count; i++) {
-            MP_PREFETCH(&out[i + 8], 0, 1);
-            MP_PREFETCH(&funcs[i + 8], 0, 1);
+            NR_PREFETCH(&out[i + 8], 0, 1);
+            NR_PREFETCH(&funcs[i + 8], 0, 1);
             out[i] = funcs[i];
         }
         return;
     }
     int64_t* total_w = malloc((((int64_t)(count)) * 8));
     for (int64_t i = 0; i < count; i++) {
-        MP_PREFETCH(&total_w[i + 8], 0, 1);
+        NR_PREFETCH(&total_w[i + 8], 0, 1);
         total_w[i] = 0;
     }
     int32_t best_edge_a = (int32_t)(0);
     int32_t best_edge_b = (int32_t)(1);
     int64_t best_w = 0;
     for (int64_t i = 0; i < count; i++) {
-        MP_PREFETCH(&total_w[i + 8], 0, 1);
-        MP_PREFETCH(&funcs[i + 8], 0, 1);
+        NR_PREFETCH(&total_w[i + 8], 0, 1);
+        NR_PREFETCH(&funcs[i + 8], 0, 1);
         for (int64_t j = (i + 1); j < count; j++) {
-            MP_PREFETCH(&funcs[j + 8], 0, 1);
-            MP_PREFETCH(&total_w[j + 8], 0, 1);
-            MpStr* key = native_compile_file__edge_key(funcs[i]->name, funcs[j]->name);
+            NR_PREFETCH(&funcs[j + 8], 0, 1);
+            NR_PREFETCH(&total_w[j + 8], 0, 1);
+            NrStr* key = native_compile_file__edge_key(funcs[i]->name, funcs[j]->name);
             void* wptr = strmap_strmap_get(edges, key);
             if ((wptr != NULL)) {
                 int64_t w = ((int64_t)(wptr));
@@ -810,8 +810,8 @@ void native_compile_file__reorder_by_call_graph(const AstFunctionDef** restrict 
     }
     if ((best_w == 0)) {
         for (int64_t i = 0; i < count; i++) {
-            MP_PREFETCH(&out[i + 8], 0, 1);
-            MP_PREFETCH(&funcs[i + 8], 0, 1);
+            NR_PREFETCH(&out[i + 8], 0, 1);
+            NR_PREFETCH(&funcs[i + 8], 0, 1);
             out[i] = funcs[i];
         }
         free(total_w);
@@ -820,7 +820,7 @@ void native_compile_file__reorder_by_call_graph(const AstFunctionDef** restrict 
     int32_t* placed = malloc((((int64_t)(count)) * 4));
     int32_t* placed_set = malloc((((int64_t)(count)) * 4));
     for (int64_t i = 0; i < count; i++) {
-        MP_PREFETCH(&placed_set[i + 8], 0, 1);
+        NR_PREFETCH(&placed_set[i + 8], 0, 1);
         placed_set[i] = 0;
     }
     placed[0] = best_edge_a;
@@ -832,8 +832,8 @@ void native_compile_file__reorder_by_call_graph(const AstFunctionDef** restrict 
         int32_t best_idx = (int32_t)((-1));
         int64_t best_tw = (-1);
         for (int64_t i = 0; i < count; i++) {
-            MP_PREFETCH(&total_w[i + 8], 0, 1);
-            MP_PREFETCH(&placed_set[i + 8], 0, 1);
+            NR_PREFETCH(&total_w[i + 8], 0, 1);
+            NR_PREFETCH(&placed_set[i + 8], 0, 1);
             if (((placed_set[i] == 0) && (total_w[i] > best_tw))) {
                 best_tw = total_w[i];
                 best_idx = (int32_t)(i);
@@ -841,7 +841,7 @@ void native_compile_file__reorder_by_call_graph(const AstFunctionDef** restrict 
         }
         if ((best_idx < 0)) {
             for (int64_t i = 0; i < count; i++) {
-                MP_PREFETCH(&placed_set[i + 8], 0, 1);
+                NR_PREFETCH(&placed_set[i + 8], 0, 1);
                 if ((placed_set[i] == 0)) {
                     best_idx = (int32_t)(i);
                     break;
@@ -851,8 +851,8 @@ void native_compile_file__reorder_by_call_graph(const AstFunctionDef** restrict 
         int32_t best_neighbor_pos = (int32_t)((placed_count - 1));
         int64_t best_nw = (-1);
         for (int64_t pi = 0; pi < placed_count; pi++) {
-            MP_PREFETCH(&placed[pi + 8], 0, 1);
-            MpStr* nkey = native_compile_file__edge_key(funcs[best_idx]->name, funcs[placed[pi]]->name);
+            NR_PREFETCH(&placed[pi + 8], 0, 1);
+            NrStr* nkey = native_compile_file__edge_key(funcs[best_idx]->name, funcs[placed[pi]]->name);
             void* nwptr = strmap_strmap_get(edges, nkey);
             if ((nwptr != NULL)) {
                 int64_t nw = ((int64_t)(nwptr));
@@ -864,7 +864,7 @@ void native_compile_file__reorder_by_call_graph(const AstFunctionDef** restrict 
         }
         int32_t insert_pos = (int32_t)((best_neighbor_pos + 1));
         for (int64_t shi = placed_count; shi > insert_pos; shi += (-1)) {
-            MP_PREFETCH(&placed[shi + 8], 0, 1);
+            NR_PREFETCH(&placed[shi + 8], 0, 1);
             placed[shi] = placed[(shi - 1)];
         }
         placed[insert_pos] = best_idx;
@@ -872,8 +872,8 @@ void native_compile_file__reorder_by_call_graph(const AstFunctionDef** restrict 
         placed_count = (int32_t)((placed_count + 1));
     }
     for (int64_t i = 0; i < count; i++) {
-        MP_PREFETCH(&out[i + 8], 0, 1);
-        MP_PREFETCH(&placed[i + 8], 0, 1);
+        NR_PREFETCH(&out[i + 8], 0, 1);
+        NR_PREFETCH(&placed[i + 8], 0, 1);
         out[i] = funcs[placed[i]];
     }
     free(total_w);
@@ -881,7 +881,7 @@ void native_compile_file__reorder_by_call_graph(const AstFunctionDef** restrict 
     free(placed_set);
 }
 
-void native_compile_file__dce_find_calls(const AstNode* restrict node, StrSet* restrict all_names, StrSet* restrict reachable, MpStr** restrict work, int32_t* restrict work_count, MpStr* restrict caller) {
+void native_compile_file__dce_find_calls(const AstNode* restrict node, StrSet* restrict all_names, StrSet* restrict reachable, NrStr** restrict work, int32_t* restrict work_count, NrStr* restrict caller) {
     "Recursively find calls to module functions in a statement, add unreached ones to work list.";
     if ((node == NULL)) {
         return;
@@ -890,7 +890,7 @@ void native_compile_file__dce_find_calls(const AstNode* restrict node, StrSet* r
         AstCall* c = node->data;
         if (((c->func != NULL) && (c->func->tag == TAG_NAME))) {
             AstName* fn = c->func->data;
-            if (((!mp_str_eq(fn->id, caller)) && strmap_strset_has(all_names, fn->id) && (strmap_strset_has(reachable, fn->id) == 0))) {
+            if (((!nr_str_eq(fn->id, caller)) && strmap_strset_has(all_names, fn->id) && (strmap_strset_has(reachable, fn->id) == 0))) {
                 work[(*(work_count))] = fn->id;
                 *(work_count) = ((*(work_count)) + 1);
                 (void)0;
@@ -972,7 +972,7 @@ void native_compile_file__dce_find_calls(const AstNode* restrict node, StrSet* r
 void native_compile_file__emit_functions(CompilerState* s, AstNodeList body) {
     "Compile and emit all function definitions including struct methods.";
     int64_t has_main = 0;
-    MpStr** test_names = malloc((256 * 8));
+    NrStr** test_names = malloc((256 * 8));
     int32_t test_count = (int32_t)(0);
     AstFunctionDef** top_funcs = malloc((((int64_t)(body.count)) * 8));
     int32_t top_count = (int32_t)(0);
@@ -980,7 +980,7 @@ void native_compile_file__emit_functions(CompilerState* s, AstNodeList body) {
         AstNode* node = body.items[i];
         if (((node != NULL) && (node->tag == TAG_FUNCTION_DEF))) {
             AstFunctionDef* fd = node->data;
-            if (native_compile_file__has_decorator(fd, mp_str_new("extern"))) {
+            if (native_compile_file__has_decorator(fd, nr_str_new("extern"))) {
                 continue;
             }
             top_funcs[top_count] = fd;
@@ -990,29 +990,29 @@ void native_compile_file__emit_functions(CompilerState* s, AstNodeList body) {
     if (((s->dce_roots != NULL) && (top_count > 0))) {
         StrSet all_names = strmap_strset_new((((int64_t)(top_count)) * 2));
         for (int64_t i = 0; i < top_count; i++) {
-            MP_PREFETCH(&top_funcs[i + 8], 0, 1);
+            NR_PREFETCH(&top_funcs[i + 8], 0, 1);
             strmap_strset_add((&all_names), top_funcs[i]->name);
         }
         StrSet reachable = strmap_strset_new((((int64_t)(top_count)) * 2));
-        MpStr** work = malloc((((int64_t)(top_count)) * 8));
+        NrStr** work = malloc((((int64_t)(top_count)) * 8));
         int32_t work_count = (int32_t)(0);
         for (int64_t i = 0; i < top_count; i++) {
-            MP_PREFETCH(&top_funcs[i + 8], 0, 1);
-            if ((strmap_strset_has(s->dce_roots, top_funcs[i]->name) || mp_str_eq(top_funcs[i]->name, (&(MpStr){.data=(char*)"main",.len=4})))) {
+            NR_PREFETCH(&top_funcs[i + 8], 0, 1);
+            if ((strmap_strset_has(s->dce_roots, top_funcs[i]->name) || nr_str_eq(top_funcs[i]->name, (&(NrStr){.data=(char*)"main",.len=4})))) {
                 work[work_count] = top_funcs[i]->name;
                 work_count = (int32_t)((work_count + 1));
             }
         }
         while ((work_count > 0)) {
             work_count = (int32_t)((work_count - 1));
-            MpStr* cur_name = work[work_count];
+            NrStr* cur_name = work[work_count];
             if (strmap_strset_has((&reachable), cur_name)) {
                 continue;
             }
             strmap_strset_add((&reachable), cur_name);
             for (int64_t fi = 0; fi < top_count; fi++) {
-                MP_PREFETCH(&top_funcs[fi + 8], 0, 1);
-                if (mp_str_eq(top_funcs[fi]->name, cur_name)) {
+                NR_PREFETCH(&top_funcs[fi + 8], 0, 1);
+                if (nr_str_eq(top_funcs[fi]->name, cur_name)) {
                     for (int64_t si = 0; si < top_funcs[fi]->body.count; si++) {
                         AstNode* bnode = top_funcs[fi]->body.items[si];
                         if ((bnode != NULL)) {
@@ -1024,7 +1024,7 @@ void native_compile_file__emit_functions(CompilerState* s, AstNodeList body) {
         }
         int32_t new_count = (int32_t)(0);
         for (int64_t i = 0; i < top_count; i++) {
-            MP_PREFETCH(&top_funcs[i + 8], 0, 1);
+            NR_PREFETCH(&top_funcs[i + 8], 0, 1);
             if (strmap_strset_has((&reachable), top_funcs[i]->name)) {
                 top_funcs[new_count] = top_funcs[i];
                 new_count = (int32_t)((new_count + 1));
@@ -1038,14 +1038,14 @@ void native_compile_file__emit_functions(CompilerState* s, AstNodeList body) {
     if (((s->reorder_funcs != 0) && (top_count > 1))) {
         StrSet func_names = strmap_strset_new((((int64_t)(top_count)) * 2));
         for (int64_t i = 0; i < top_count; i++) {
-            MP_PREFETCH(&top_funcs[i + 8], 0, 1);
+            NR_PREFETCH(&top_funcs[i + 8], 0, 1);
             strmap_strset_add((&func_names), top_funcs[i]->name);
         }
         StrMap edges = strmap_strmap_new((((int64_t)(top_count)) * 4));
         for (int64_t i = 0; i < top_count; i++) {
-            MP_PREFETCH(&top_funcs[i + 8], 0, 1);
+            NR_PREFETCH(&top_funcs[i + 8], 0, 1);
             int64_t is_hot = 0;
-            if (native_compile_file__has_decorator(top_funcs[i], mp_str_new("hot"))) {
+            if (native_compile_file__has_decorator(top_funcs[i], nr_str_new("hot"))) {
                 is_hot = 1;
             }
             native_compile_file__walk_calls_weighted(top_funcs[i]->body, top_funcs[i]->name, (&func_names), (&edges), 0, is_hot);
@@ -1053,8 +1053,8 @@ void native_compile_file__emit_functions(CompilerState* s, AstNodeList body) {
         AstFunctionDef** reordered = malloc((((int64_t)(top_count)) * 8));
         native_compile_file__reorder_by_call_graph(top_funcs, top_count, (&edges), reordered);
         for (int64_t i = 0; i < top_count; i++) {
-            MP_PREFETCH(&top_funcs[i + 8], 0, 1);
-            MP_PREFETCH(&reordered[i + 8], 0, 1);
+            NR_PREFETCH(&top_funcs[i + 8], 0, 1);
+            NR_PREFETCH(&reordered[i + 8], 0, 1);
             top_funcs[i] = reordered[i];
         }
         free(reordered);
@@ -1062,31 +1062,31 @@ void native_compile_file__emit_functions(CompilerState* s, AstNodeList body) {
         strmap_strset_free((&func_names));
     }
     for (int64_t i = 0; i < top_count; i++) {
-        MP_PREFETCH(&top_funcs[i + 8], 0, 1);
+        NR_PREFETCH(&top_funcs[i + 8], 0, 1);
         AstFunctionDef* fd2 = top_funcs[i];
-        if (mp_str_eq(fd2->name, (&(MpStr){.data=(char*)"main",.len=4}))) {
+        if (nr_str_eq(fd2->name, (&(NrStr){.data=(char*)"main",.len=4}))) {
             has_main = 1;
         }
-        native_compile_file__compile_one_func(s, fd2, mp_str_new(""));
-        if (native_compile_file__has_decorator(fd2, mp_str_new("test"))) {
+        native_compile_file__compile_one_func(s, fd2, nr_str_new(""));
+        if (native_compile_file__has_decorator(fd2, nr_str_new("test"))) {
             test_names[test_count] = fd2->name;
             test_count = (int32_t)((test_count + 1));
-            native_compile_file__emit_raw(s, mp_str_format("static void _mp_run_test_%s(void) {", fd2->name->data));
-            native_compile_file__emit_raw(s, mp_str_new("    _mp_test_total++;"));
-            native_compile_file__emit_raw(s, mp_str_new("    _mp_test_failures = 0;"));
-            native_compile_file__emit_raw(s, mp_str_format("    _mp_cprint(_MP_GREEN, \"[ RUN      ] %s\\n\");", fd2->name->data));
-            native_compile_file__emit_raw(s, mp_str_new("    uint64_t _t1 = _mp_time_ns();"));
-            native_compile_file__emit_raw(s, mp_str_format("    %s();", fd2->name->data));
-            native_compile_file__emit_raw(s, mp_str_new("    uint64_t _t2 = _mp_time_ns();"));
-            native_compile_file__emit_raw(s, mp_str_new("    char _tbuf[64]; _mp_fmt_time(_t2 - _t1, _tbuf, sizeof(_tbuf));"));
-            native_compile_file__emit_raw(s, mp_str_new("    if (_mp_test_failures == 0) {"));
-            native_compile_file__emit_raw(s, mp_str_format("        _mp_cprint(_MP_GREEN, \"[       OK ] %s %%s\\n\", _tbuf);", fd2->name->data));
-            native_compile_file__emit_raw(s, mp_str_new("    } else {"));
-            native_compile_file__emit_raw(s, mp_str_new("        _mp_test_fail_total++;"));
-            native_compile_file__emit_raw(s, mp_str_format("        _mp_cprint(_MP_RED, \"[  FAILED  ] %s (%%d failures)\\n\", _mp_test_failures);", fd2->name->data));
-            native_compile_file__emit_raw(s, mp_str_new("    }"));
-            native_compile_file__emit_raw(s, mp_str_new("}"));
-            native_compile_file__emit_raw(s, mp_str_new(""));
+            native_compile_file__emit_raw(s, nr_str_format("static void _nr_run_test_%s(void) {", fd2->name->data));
+            native_compile_file__emit_raw(s, nr_str_new("    _nr_test_total++;"));
+            native_compile_file__emit_raw(s, nr_str_new("    _nr_test_failures = 0;"));
+            native_compile_file__emit_raw(s, nr_str_format("    _nr_cprint(_NR_GREEN, \"[ RUN      ] %s\\n\");", fd2->name->data));
+            native_compile_file__emit_raw(s, nr_str_new("    uint64_t _t1 = _nr_time_ns();"));
+            native_compile_file__emit_raw(s, nr_str_format("    %s();", fd2->name->data));
+            native_compile_file__emit_raw(s, nr_str_new("    uint64_t _t2 = _nr_time_ns();"));
+            native_compile_file__emit_raw(s, nr_str_new("    char _tbuf[64]; _mp_fmt_time(_t2 - _t1, _tbuf, sizeof(_tbuf));"));
+            native_compile_file__emit_raw(s, nr_str_new("    if (_nr_test_failures == 0) {"));
+            native_compile_file__emit_raw(s, nr_str_format("        _nr_cprint(_NR_GREEN, \"[       OK ] %s %%s\\n\", _tbuf);", fd2->name->data));
+            native_compile_file__emit_raw(s, nr_str_new("    } else {"));
+            native_compile_file__emit_raw(s, nr_str_new("        _nr_test_fail_total++;"));
+            native_compile_file__emit_raw(s, nr_str_format("        _nr_cprint(_NR_RED, \"[  FAILED  ] %s (%%d failures)\\n\", _nr_test_failures);", fd2->name->data));
+            native_compile_file__emit_raw(s, nr_str_new("    }"));
+            native_compile_file__emit_raw(s, nr_str_new("}"));
+            native_compile_file__emit_raw(s, nr_str_new(""));
         }
     }
     free(top_funcs);
@@ -1095,7 +1095,7 @@ void native_compile_file__emit_functions(CompilerState* s, AstNodeList body) {
         if (((snode != NULL) && (snode->tag == TAG_CLASS_DEF))) {
             AstClassDef* cd = snode->data;
             if (strmap_strmap_has((&s->structs), cd->name)) {
-                MpStr* method_prefix = mp_str_concat(cd->name, (&(MpStr){.data=(char*)"_",.len=1}));
+                NrStr* method_prefix = nr_str_concat(cd->name, (&(NrStr){.data=(char*)"_",.len=1}));
                 for (int64_t j = 0; j < cd->body.count; j++) {
                     AstNode* method = cd->body.items[j];
                     if (((method != NULL) && (method->tag == TAG_FUNCTION_DEF))) {
@@ -1103,8 +1103,8 @@ void native_compile_file__emit_functions(CompilerState* s, AstNodeList body) {
                         AstArguments* m_args = md->args->data;
                         if ((m_args->args.count > 0)) {
                             AstArg* first_arg = m_args->args.items[0]->data;
-                            if (mp_str_eq(first_arg->name, (&(MpStr){.data=(char*)"self",.len=4}))) {
-                                strmap_strmap_set((&s->func_args), mp_str_new("self"), mp_str_concat(cd->name, (&(MpStr){.data=(char*)"*",.len=1})));
+                            if (nr_str_eq(first_arg->name, (&(NrStr){.data=(char*)"self",.len=4}))) {
+                                strmap_strmap_set((&s->func_args), nr_str_new("self"), nr_str_concat(cd->name, (&(NrStr){.data=(char*)"*",.len=1})));
                             }
                         }
                         native_compile_file__compile_one_func(s, md, method_prefix);
@@ -1114,25 +1114,25 @@ void native_compile_file__emit_functions(CompilerState* s, AstNodeList body) {
         }
     }
     if (((test_count > 0) && (has_main == 0))) {
-        native_compile_file__emit_raw(s, mp_str_new("int main(void) {"));
-        native_compile_file__emit_raw(s, mp_str_new("    _mp_time_init();"));
+        native_compile_file__emit_raw(s, nr_str_new("int main(void) {"));
+        native_compile_file__emit_raw(s, nr_str_new("    _nr_time_init();"));
         for (int64_t i = 0; i < test_count; i++) {
-            MP_PREFETCH(&test_names[i + 8], 0, 1);
-            native_compile_file__emit_raw(s, mp_str_format("    _mp_run_test_%s();", test_names[i]->data));
+            NR_PREFETCH(&test_names[i + 8], 0, 1);
+            native_compile_file__emit_raw(s, nr_str_format("    _nr_run_test_%s();", test_names[i]->data));
         }
-        native_compile_file__emit_raw(s, mp_str_new("    printf(\"[==========] %d tests, %d failures\\n\", _mp_test_total, _mp_test_fail_total);"));
-        native_compile_file__emit_raw(s, mp_str_new("    return _mp_test_fail_total ? 1 : 0;"));
-        native_compile_file__emit_raw(s, mp_str_new("}"));
-        native_compile_file__emit_raw(s, mp_str_new(""));
+        native_compile_file__emit_raw(s, nr_str_new("    printf(\"[==========] %d tests, %d failures\\n\", _nr_test_total, _nr_test_fail_total);"));
+        native_compile_file__emit_raw(s, nr_str_new("    return _nr_test_fail_total ? 1 : 0;"));
+        native_compile_file__emit_raw(s, nr_str_new("}"));
+        native_compile_file__emit_raw(s, nr_str_new(""));
     }
     free(test_names);
 }
 
 void native_compile_file__emit_runtime_impl(CompilerState* s) {
     "Emit the runtime implementation include at the end.";
-    native_compile_file__emit_raw(s, mp_str_new(""));
-    native_compile_file__emit_raw(s, mp_str_new("#define MICROPY_RT_IMPL"));
-    native_compile_file__emit_raw(s, mp_str_new("#include \"micropy_rt.h\""));
+    native_compile_file__emit_raw(s, nr_str_new(""));
+    native_compile_file__emit_raw(s, nr_str_new("#define NATHRA_RT_IMPL"));
+    native_compile_file__emit_raw(s, nr_str_new("#include \"nathra_rt.h\""));
 }
 
 int32_t native_compile_file_native_compile(const uint8_t* restrict ast_buf, int64_t ast_len, uint8_t** restrict out_buf, int64_t* restrict out_len) {
@@ -1161,7 +1161,7 @@ int32_t native_compile_file_native_compile(const uint8_t* restrict ast_buf, int6
     native_compile_file__emit_functions((&s), mod->body);
     native_compile_file__emit_runtime_impl((&s));
     int64_t result_len = 0;
-    uint8_t* result_buf = mp_writer_to_bytes(s.lines, (&result_len));
+    uint8_t* result_buf = nr_writer_to_bytes(s.lines, (&result_len));
     *(out_buf) = result_buf;
     (void)0;
     *(out_len) = result_len;
@@ -1197,17 +1197,17 @@ int32_t native_compile_file_native_compile_dep(CompilerState* restrict state, co
             has_dce = 1;
             int64_t start = 0;
             for (int64_t pos = 0; pos < used_names_len; pos++) {
-                MP_PREFETCH(&used_names_buf[pos + 8], 0, 1);
+                NR_PREFETCH(&used_names_buf[pos + 8], 0, 1);
                 if ((used_names_buf[pos] == 0)) {
                     if ((pos > start)) {
                         int64_t slen = (pos - start);
                         uint8_t* nbuf = malloc((slen + 1));
                         for (int64_t bi = 0; bi < slen; bi++) {
-                            MP_PREFETCH(&nbuf[bi + 8], 0, 1);
+                            NR_PREFETCH(&nbuf[bi + 8], 0, 1);
                             nbuf[bi] = used_names_buf[(start + bi)];
                         }
                         nbuf[slen] = 0;
-                        strmap_strset_add((&used_set), mp_str_new(nbuf));
+                        strmap_strset_add((&used_set), nr_str_new(nbuf));
                         free(nbuf);
                     }
                     start = (pos + 1);
@@ -1216,10 +1216,10 @@ int32_t native_compile_file_native_compile_dep(CompilerState* restrict state, co
         }
         native_compile_file__first_pass(state, mod->body);
         native_compile_file__scan_typed_lists(state, mod->body);
-        MpWriter* saved_lines = state->lines;
-        MpWriter* saved_header = state->header;
-        state->lines = mp_writer_new(4096);
-        state->header = mp_writer_new(1024);
+        NrWriter* saved_lines = state->lines;
+        NrWriter* saved_header = state->header;
+        state->lines = nr_writer_new(4096);
+        state->header = nr_writer_new(1024);
         if (has_dce) {
             state->dce_roots = (&used_set);
         }
@@ -1235,13 +1235,13 @@ int32_t native_compile_file_native_compile_dep(CompilerState* restrict state, co
         native_compile_file__emit_runtime_impl(state);
         state->dce_roots = NULL;
         int64_t c_len = 0;
-        uint8_t* c_buf = mp_writer_to_bytes(state->lines, (&c_len));
+        uint8_t* c_buf = nr_writer_to_bytes(state->lines, (&c_len));
         *(out_c) = c_buf;
         (void)0;
         *(out_c_len) = c_len;
         (void)0;
         int64_t h_len = 0;
-        uint8_t* h_buf = mp_writer_to_bytes(state->header, (&h_len));
+        uint8_t* h_buf = nr_writer_to_bytes(state->header, (&h_len));
         *(out_h) = h_buf;
         (void)0;
         *(out_h_len) = h_len;
@@ -1267,7 +1267,7 @@ int32_t native_compile_file_native_compile_main(CompilerState* restrict state, c
     native_compile_file__scan_typed_lists(state, mod->body);
     native_analysis_native_infer_cold_from_body(state, mod->body);
     native_analysis_native_build_alloc_tags(state, mod->body);
-    state->lines = mp_writer_new(4096);
+    state->lines = nr_writer_new(4096);
     native_compile_file__emit_includes(state, mod->body);
     native_compile_file__emit_typed_lists(state);
     native_compile_file__emit_forward_typedefs(state, mod->body);
@@ -1279,7 +1279,7 @@ int32_t native_compile_file_native_compile_main(CompilerState* restrict state, c
     native_compile_file__emit_functions(state, mod->body);
     native_compile_file__emit_runtime_impl(state);
     int64_t result_len = 0;
-    uint8_t* result_buf = mp_writer_to_bytes(state->lines, (&result_len));
+    uint8_t* result_buf = nr_writer_to_bytes(state->lines, (&result_len));
     *(out_buf) = result_buf;
     (void)0;
     *(out_len) = result_len;
