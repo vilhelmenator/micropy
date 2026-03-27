@@ -485,6 +485,22 @@ def process() -> void:
 
 Free functions: `list_free(l)`, `str_free(s)`, `dict_free(d)`.
 
+**`own[T]`** — opt-in ownership annotation. Marks a variable or parameter as owning its heap allocation. The compiler tracks liveness and enforces that owned values are freed or transferred — use-after-move and forgotten frees are compile errors:
+
+```python
+def consume(data: own[list[int]]) -> void:
+    defer(list_free(data))
+    for x in data:
+        print(x)
+
+def main() -> void:
+    nums: own[list[int]] = [10, 20, 30]
+    consume(nums)       # ownership transferred
+    print(len(nums))    # COMPILE ERROR: use of moved value 'nums'
+```
+
+Plain `ptr[T]`, `list[T]`, `str` parameters remain borrowed — no ownership transfer. `own[T]` is opt-in for functions that want to express "I take this and I'm responsible for it." Always on, zero runtime cost.
+
 **Arenas** — allocate many objects from a single region; free everything at once. Good for temporary work where individual lifetimes don't matter:
 
 ```python
@@ -498,6 +514,17 @@ def process() -> void:
 
     arena_reset(a)   # discard all allocations without freeing the arena itself
     # arena_free called on return via defer
+```
+
+**Scoped arenas** — `with scope` creates and frees an arena automatically at scope exit:
+
+```python
+def process() -> void:
+    with scope(arena, 65536):
+        s: str = arena_str_new(arena, "temp")
+        lst: list = arena_list_new(arena)
+        # use freely — no defer needed
+    # arena freed here automatically
 ```
 
 **Raw pointers** — `alloc`/`free` for manual byte-level control:
@@ -934,6 +961,26 @@ Any file with `@test` functions gets a generated test runner main. Output is Goo
 [==========] 1 tests, 0 failures
 ```
 
+**Heap assertions** — verify that code paths don't leak, under `--safe` or `--track-alloc`:
+
+```python
+@test
+def test_no_leak() -> void:
+    snap: int = heap_allocated()
+    nums: list[int] = [10, 20, 30]
+    list_free(nums)
+    heap_assert(snap)              # all memory returned
+
+@test
+def test_delta() -> void:
+    snap: int = heap_allocated()
+    s: str = str_new("hello")
+    str_free(s)
+    heap_assert_delta(snap, 0)     # zero net change
+```
+
+In release builds, heap tracking compiles out — zero overhead.
+
 ### Error messages
 
 Compiler errors point directly to the `.mpy` source line via `#line` directives:
@@ -1111,21 +1158,21 @@ python3 run_opts.py
 
 ## Bootstrap performance
 
-The native compiler is written in nathra and compiles itself. Self-compilation benchmark — the native compiler compiling its own 8 source modules (~3,900 lines) to C:
+The native compiler is written in nathra and compiles itself. Self-compilation benchmark — the native compiler compiling its own 8 source modules (~4,000 lines) to C:
 
 | Module | Python | Native | Speedup |
 |--------|--------|--------|---------|
-| native_analysis.mpy | 134 ms | 0.20 ms | 653x |
-| native_compile_file.mpy | 581 ms | 1.26 ms | 459x |
-| native_infer.mpy | 139 ms | 0.25 ms | 559x |
-| native_type_map.mpy | 138 ms | 0.31 ms | 450x |
-| native_codegen_stmt.mpy | 360 ms | 1.12 ms | 323x |
-| native_codegen_call.mpy | 287 ms | 0.96 ms | 301x |
-| native_codegen_expr.mpy | 218 ms | 0.76 ms | 287x |
-| native_compiler_state.mpy | 41 ms | 0.15 ms | 279x |
-| **Total** | **1,898 ms** | **5.00 ms** | **380x** |
+| native_analysis.mpy | 139 ms | 0.22 ms | 624x |
+| native_compile_file.mpy | 637 ms | 1.25 ms | 511x |
+| native_infer.mpy | 147 ms | 0.27 ms | 540x |
+| native_type_map.mpy | 144 ms | 0.33 ms | 436x |
+| native_codegen_stmt.mpy | 383 ms | 1.04 ms | 367x |
+| native_codegen_call.mpy | 311 ms | 0.94 ms | 331x |
+| native_codegen_expr.mpy | 225 ms | 0.78 ms | 287x |
+| native_compiler_state.mpy | 43 ms | 0.17 ms | 248x |
+| **Total** | **2,029 ms** | **5.01 ms** | **405x** |
 
-The native compiler compiles ~3,900 lines of its own source in 5 milliseconds. Total compile time becomes dominated by `gcc`, which is the correct steady state — the compiler should never be slower than the C compiler it feeds.
+The native compiler compiles ~4,000 lines of its own source in 5 milliseconds. Total compile time becomes dominated by `gcc`, which is the correct steady state — the compiler should never be slower than the C compiler it feeds.
 
 Run `python3 scripts/benchmark.py` to reproduce.
 
@@ -1158,7 +1205,7 @@ nathra/
     micropy_rt.h                      Full runtime: strings, lists, dicts, I/O, concurrency
     micropy_types.h                   Forward declarations — safe to include from any header
     micropy_test.h                    Test runner infrastructure
-  native/                           Bootstrap native compiler (380x faster)
+  native/                           Bootstrap native compiler (405x faster)
     src/                              .mpy source for the native compiler
     generated/                        Pre-generated .c/.h — just run make
   lib/
@@ -1168,7 +1215,7 @@ nathra/
     bootstrap_test.py                 Bootstrap verification
   build/                            Build artifacts (gitignored)
     compiler_native.dylib             Native compiler shared library
-  tests/                            Test suite (45 tests)
+  tests/                            Test suite (48 tests)
   bench/                            Benchmarks
   examples/                         Example programs
 ```
